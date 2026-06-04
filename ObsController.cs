@@ -49,12 +49,20 @@ public sealed class ObsController : IObsController
 
     public void Connect()
     {
+        if (_obs.IsConnected)
+            Disconnect();
+
+        // Fire-and-forget, but routed through a guarded async method so a failed
+        // connection never escapes as an unobserved task exception.
+        _ = ConnectGuardedAsync();
+    }
+
+    private async Task ConnectGuardedAsync()
+    {
         try
         {
-            if (_obs.IsConnected)
-                Disconnect();
-
-            _obs.ConnectAsync(Url, _password);
+            if (await IsObsReachableAsync(CancellationToken.None).ConfigureAwait(false))
+                _obs.ConnectAsync(Url, _password);
         }
         catch (Exception ex)
         {
@@ -62,10 +70,38 @@ public sealed class ObsController : IObsController
         }
     }
 
+    /// <summary>
+    /// Probes whether an OBS websocket server is actually listening before calling
+    /// <see cref="OBSWebsocket.ConnectAsync"/>. The underlying websocket client starts the
+    /// connection on a background task and rethrows a refused connection from the finalizer
+    /// thread (<see cref="TaskScheduler.UnobservedTaskException"/>) when OBS is not running;
+    /// skipping the connect attempt when the port is closed avoids that crash entirely.
+    /// </summary>
+    private async Task<bool> IsObsReachableAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var client = new System.Net.Sockets.TcpClient();
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(2));
+
+            await client.ConnectAsync(_ip, _port, timeoutCts.Token).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"OBS is not reachable at {Url}: {ex.Message}");
+            return false;
+        }
+    }
+
     public async Task ConnectAndWaitAsync(CancellationToken cancellationToken = default)
     {
         if (_obs.IsConnected)
             return;
+
+        if (!await IsObsReachableAsync(cancellationToken).ConfigureAwait(false))
+            throw new InvalidOperationException($"OBS is not reachable at {Url}.");
 
         var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 

@@ -13,7 +13,9 @@ internal sealed class ObsStartRecordCommand(IObsController obs) : IPluginCommand
     {
         CommandName = "System.ObsStartRecord",
         DisplayName = "Start Recording",
-        Group = "OBS"
+        Group = "OBS",
+        Icon = "\U000F044A", // mdi-record
+        Description = "Start recording"
     };
 
     public ButtonTargets SupportedTargets => ButtonTargets.All;
@@ -27,7 +29,9 @@ internal sealed class ObsStopRecordCommand(IObsController obs) : IPluginCommand
     {
         CommandName = "System.ObsStopRecord",
         DisplayName = "Stop Recording",
-        Group = "OBS"
+        Group = "OBS",
+        Icon = "\U000F04DB", // mdi-stop
+        Description = "Stop recording"
     };
 
     public ButtonTargets SupportedTargets => ButtonTargets.All;
@@ -41,7 +45,9 @@ internal sealed class ObsPauseRecordCommand(IObsController obs) : IPluginCommand
     {
         CommandName = "System.ObsPauseRecord",
         DisplayName = "Pause Recording",
-        Group = "OBS"
+        Group = "OBS",
+        Icon = "\U000F03E4", // mdi-pause
+        Description = "Pause or resume recording"
     };
 
     public ButtonTargets SupportedTargets => ButtonTargets.All;
@@ -55,7 +61,9 @@ internal sealed class ObsVirtualCamCommand(IObsController obs) : IPluginCommand
     {
         CommandName = "System.ObsVirtualCam",
         DisplayName = "Toggle Virtual Camera",
-        Group = "OBS"
+        Group = "OBS",
+        Icon = "\U000F05A0", // mdi-webcam
+        Description = "Toggle the virtual camera"
     };
 
     public ButtonTargets SupportedTargets => ButtonTargets.All;
@@ -69,7 +77,9 @@ internal sealed class ObsStartReplayCommand(IObsController obs) : IPluginCommand
     {
         CommandName = "System.ObsStartReplay",
         DisplayName = "Start Replay",
-        Group = "OBS"
+        Group = "OBS",
+        Icon = "\U000F040A", // mdi-play
+        Description = "Start the replay buffer"
     };
 
     public ButtonTargets SupportedTargets => ButtonTargets.All;
@@ -83,7 +93,9 @@ internal sealed class ObsStopReplayCommand(IObsController obs) : IPluginCommand
     {
         CommandName = "System.ObsStopReplay",
         DisplayName = "Stop Replay",
-        Group = "OBS"
+        Group = "OBS",
+        Icon = "\U000F04DB", // mdi-stop
+        Description = "Stop the replay buffer"
     };
 
     public ButtonTargets SupportedTargets => ButtonTargets.All;
@@ -97,7 +109,9 @@ internal sealed class ObsSaveReplayCommand(IObsController obs) : IPluginCommand
     {
         CommandName = "System.ObsSaveReplay",
         DisplayName = "Save Replay",
-        Group = "OBS"
+        Group = "OBS",
+        Icon = "\U000F0193", // mdi-content-save
+        Description = "Save the replay buffer"
     };
 
     public ButtonTargets SupportedTargets => ButtonTargets.All;
@@ -112,6 +126,8 @@ internal sealed class ObsSetSceneCommand(IObsController obs) : IPluginCommand
         CommandName = "System.ObsSetScene",
         DisplayName = "Set Scene",
         Group = "OBS",
+        Icon = "\U000F0FCF", // mdi-movie-open-outline
+        Description = "Switch to a scene",
         ParameterTemplate = "({SceneName})",
         Parameters = [new CommandParameter("SceneName", typeof(string))],
         // Surfaced per scene through the dynamic "Scenes" submenu.

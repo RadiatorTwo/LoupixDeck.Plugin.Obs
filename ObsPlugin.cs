@@ -20,7 +20,7 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
         Id = "obs",
         Name = "OBS Studio",
         Version = new Version(1, 0, 0),
-        SdkVersion = new Version(1, 1, 0),
+        SdkVersion = new Version(1, 16, 0),
         Author = "RadiatorTwo",
         Description = "Control OBS Studio (recording, replay buffer, virtual camera, scenes) via obs-websocket."
     };
@@ -51,6 +51,17 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
             new ObsSetSceneCommand(_controller)
         ];
     }
+
+    public override IReadOnlyList<CommandGroupDescriptor> GetCommandGroups() =>
+    [
+        new CommandGroupDescriptor
+        {
+            Group = "OBS",
+            Description = "Scene, source and stream control",
+            Icon = "\U000F0567", // mdi-video
+            Section = CommandGroupSection.Plugins
+        }
+    ];
 
     // ───────── IMenuContributor — dynamic "Scenes" submenu ─────────
 

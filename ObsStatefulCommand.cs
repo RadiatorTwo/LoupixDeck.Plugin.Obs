@@ -36,8 +36,9 @@ internal abstract class ObsStatefulCommand : IDisplayImageCommand
         int centerX = canvas.Width / 2;
         int centerY = (canvas.Height / 2) - (size / 10);
 
-        canvas.Clear(PluginColor.FromRgb(0x14, 0x16, 0x1A));
-
+        // Nothing is cleared: the canvas starts fully transparent and the indicator is composited
+        // over whatever the state already shows — the button's background color and the user's own
+        // layers stay visible.
         if (visual.Active)
             canvas.FillCircle(centerX, centerY, radius, visual.Accent);
         else

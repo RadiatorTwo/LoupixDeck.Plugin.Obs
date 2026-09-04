@@ -69,10 +69,11 @@ internal sealed class ObsStateReporter : IDisposable
 
     private void OnRecordStateChanged(ObsRecordState state)
     {
+        // A paused recording is still running, so it stays on "Recording" — pausing is its own
+        // command, and the toggle button only says whether OBS is recording at all.
         string target = state switch
         {
-            ObsRecordState.Recording => ObsStates.Recording,
-            ObsRecordState.Paused => ObsStates.Paused,
+            ObsRecordState.Recording or ObsRecordState.Paused => ObsStates.Recording,
             _ => ObsStates.Idle
         };
 

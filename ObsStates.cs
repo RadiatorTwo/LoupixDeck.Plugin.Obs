@@ -16,7 +16,6 @@ internal static class ObsStates
     // Recording.
     public const string Idle = "Idle";
     public const string Recording = "Recording";
-    public const string Paused = "Paused";
 
     // Replay buffer, virtual camera, studio mode.
     public const string Off = "Off";
@@ -28,17 +27,18 @@ internal static class ObsStates
 
     private static readonly PluginColor Inactive = PluginColor.FromRgb(0x60, 0x66, 0x70);
     private static readonly PluginColor Red = PluginColor.FromRgb(0xE0, 0x3B, 0x3B);
-    private static readonly PluginColor Amber = PluginColor.FromRgb(0xE0, 0x9B, 0x2B);
     private static readonly PluginColor Green = PluginColor.FromRgb(0x36, 0xB3, 0x5E);
     private static readonly PluginColor Blue = PluginColor.FromRgb(0x2E, 0x8B, 0xE0);
     private static readonly PluginColor Purple = PluginColor.FromRgb(0x8B, 0x5C, 0xE0);
 
-    /// <summary>Recording: idle, running, paused — in the order the reporter's indices use.</summary>
+    /// <summary>
+    /// Recording. A paused recording is still a recording, and pausing has its own command, so
+    /// there is no separate paused state here.
+    /// </summary>
     public static IReadOnlyList<ButtonStateDescriptor> Record { get; } =
     [
         new() { Name = Idle, Description = "Not recording" },
-        new() { Name = Recording, Description = "Recording" },
-        new() { Name = Paused, Description = "Recording paused" }
+        new() { Name = Recording, Description = "Recording" }
     ];
 
     /// <summary>A plain on/off output: replay buffer, virtual camera, studio mode.</summary>
@@ -59,8 +59,7 @@ internal static class ObsStates
         new Dictionary<string, ObsStateVisual>(StringComparer.OrdinalIgnoreCase)
         {
             [Idle] = new("REC", Inactive, false),
-            [Recording] = new("REC", Red, true),
-            [Paused] = new("PAUSE", Amber, true)
+            [Recording] = new("REC", Red, true)
         };
 
     public static IReadOnlyDictionary<string, ObsStateVisual> ReplayVisuals { get; } =

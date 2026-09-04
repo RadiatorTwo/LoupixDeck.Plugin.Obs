@@ -28,12 +28,15 @@ its `<current>` default the command follows the current program scene.
 ## Button states
 
 The five toggle commands declare their own states, so assigning one to a button
-creates them: `Idle` / `Recording` / `Paused` for recording, `Off` / `On` for the
+creates them: `Idle` / `Recording` for recording, `Off` / `On` for the
 replay buffer, virtual camera and studio mode, `Offline` / `Live` for streaming.
 The button then follows what OBS is actually doing, including changes made in OBS
 itself, and each state draws its own indicator. State management is locked while
 such a command is assigned — the layers inside every state stay yours, so put your
 own text, icon or background around the indicator.
+
+A paused recording counts as recording — pausing has its own command, so the toggle
+only says whether OBS is recording at all.
 
 The discrete actions (start, stop, pause, save) carry no states: they are one-way
 commands, and which state a button should show would be a guess. A button whose

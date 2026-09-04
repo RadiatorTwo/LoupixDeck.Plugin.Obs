@@ -32,6 +32,15 @@ internal sealed class ObsStateReporter : IDisposable
 
     private static readonly string[] VirtualCamCommands = ["System.ObsVirtualCam"];
 
+    /// <summary>Commands whose button reflects the streaming state.</summary>
+    private static readonly string[] StreamCommands =
+    [
+        "System.ObsStartStream",
+        "System.ObsStopStream"
+    ];
+
+    private static readonly string[] StudioModeCommands = ["System.ObsToggleStudioMode"];
+
     private static readonly string[] InactiveNames =
         ["Idle", "Stopped", "Off", "Inactive", "Aus", "Gestoppt", "Inaktiv"];
 
@@ -51,6 +60,8 @@ internal sealed class ObsStateReporter : IDisposable
         _obs.RecordStateChanged += OnRecordStateChanged;
         _obs.ReplayBufferActiveChanged += OnReplayBufferActiveChanged;
         _obs.VirtualCamActiveChanged += OnVirtualCamActiveChanged;
+        _obs.StreamActiveChanged += OnStreamActiveChanged;
+        _obs.StudioModeChanged += OnStudioModeChanged;
     }
 
     public void Dispose()
@@ -58,6 +69,8 @@ internal sealed class ObsStateReporter : IDisposable
         _obs.RecordStateChanged -= OnRecordStateChanged;
         _obs.ReplayBufferActiveChanged -= OnReplayBufferActiveChanged;
         _obs.VirtualCamActiveChanged -= OnVirtualCamActiveChanged;
+        _obs.StreamActiveChanged -= OnStreamActiveChanged;
+        _obs.StudioModeChanged -= OnStudioModeChanged;
     }
 
     private void OnRecordStateChanged(ObsRecordState state)
@@ -75,6 +88,10 @@ internal sealed class ObsStateReporter : IDisposable
     private void OnReplayBufferActiveChanged(bool active) => ApplyToggle(ReplayCommands, active);
 
     private void OnVirtualCamActiveChanged(bool active) => ApplyToggle(VirtualCamCommands, active);
+
+    private void OnStreamActiveChanged(bool active) => ApplyToggle(StreamCommands, active);
+
+    private void OnStudioModeChanged(bool enabled) => ApplyToggle(StudioModeCommands, enabled);
 
     private void ApplyToggle(string[] commandNames, bool active) =>
         Apply(commandNames, active ? 1 : 0, active ? ActiveNames : InactiveNames);

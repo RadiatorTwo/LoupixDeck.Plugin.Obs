@@ -46,14 +46,17 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
     {
         return
         [
+            new ObsToggleRecordCommand(_controller),
             new ObsStartRecordCommand(_controller),
             new ObsStopRecordCommand(_controller),
             new ObsPauseRecordCommand(_controller),
             new ObsVirtualCamCommand(_controller),
+            new ObsToggleReplayCommand(_controller),
             new ObsStartReplayCommand(_controller),
             new ObsStopReplayCommand(_controller),
             new ObsSaveReplayCommand(_controller),
             new ObsSetSceneCommand(_controller),
+            new ObsToggleStreamCommand(_controller),
             new ObsStartStreamCommand(_controller),
             new ObsStopStreamCommand(_controller),
             new ObsToggleStudioModeCommand(_controller),

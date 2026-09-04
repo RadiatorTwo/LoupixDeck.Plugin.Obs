@@ -45,15 +45,18 @@ public interface IObsController
     void Disconnect();
 
     Task ToggleVirtualCamera();
+    Task ToggleRecording();
     Task StartRecording();
     Task StopRecording();
     Task PauseRecording();
+    Task ToggleReplayBuffer();
     Task StartReplayBuffer();
     Task StopReplayBuffer();
     Task SaveReplayBuffer();
     Task SetScene(string sceneName);
     Task<List<SceneBasicInfo>> GetScenes();
 
+    Task ToggleStream();
     Task StartStream();
     Task StopStream();
 
@@ -331,6 +334,12 @@ public sealed class ObsController : IObsController
             Guarded(() => _obs.ToggleVirtualCam(), "toggling virtual camera");
     }
 
+    public async Task ToggleRecording()
+    {
+        if (await CheckConnection().ConfigureAwait(false))
+            Guarded(() => _obs.ToggleRecord(), "toggling recording");
+    }
+
     public async Task StartRecording()
     {
         if (await CheckConnection().ConfigureAwait(false))
@@ -347,6 +356,12 @@ public sealed class ObsController : IObsController
     {
         if (await CheckConnection().ConfigureAwait(false))
             Guarded(() => _obs.ToggleRecordPause(), "pausing or resuming recording");
+    }
+
+    public async Task ToggleReplayBuffer()
+    {
+        if (await CheckConnection().ConfigureAwait(false))
+            Guarded(() => _obs.ToggleReplayBuffer(), "toggling the replay buffer");
     }
 
     public async Task StartReplayBuffer()
@@ -387,6 +402,12 @@ public sealed class ObsController : IObsController
             Console.WriteLine($"Error getting OBS scenes: {ex.Message}");
             return [];
         }
+    }
+
+    public async Task ToggleStream()
+    {
+        if (await CheckConnection().ConfigureAwait(false))
+            Guarded(() => _obs.ToggleStream(), "toggling the stream");
     }
 
     public async Task StartStream()

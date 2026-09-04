@@ -16,6 +16,7 @@ internal sealed class ObsStateReporter : IDisposable
     /// <summary>Commands whose button reflects the recording state.</summary>
     private static readonly string[] RecordCommands =
     [
+        "System.ObsToggleRecord",
         "System.ObsStartRecord",
         "System.ObsStopRecord",
         "System.ObsPauseRecord"
@@ -24,6 +25,7 @@ internal sealed class ObsStateReporter : IDisposable
     /// <summary>Commands whose button reflects the replay buffer state.</summary>
     private static readonly string[] ReplayCommands =
     [
+        "System.ObsToggleReplay",
         "System.ObsStartReplay",
         "System.ObsStopReplay",
         "System.ObsSaveReplay"
@@ -34,6 +36,7 @@ internal sealed class ObsStateReporter : IDisposable
     /// <summary>Commands whose button reflects the streaming state.</summary>
     private static readonly string[] StreamCommands =
     [
+        "System.ObsToggleStream",
         "System.ObsStartStream",
         "System.ObsStopStream"
     ];

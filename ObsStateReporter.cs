@@ -7,10 +7,9 @@ namespace LoupixDeck.Plugin.Obs;
 /// OBS command shows what OBS is actually doing — including changes made in OBS itself.
 /// </summary>
 /// <remarks>
-/// The user creates and names the button states, so a state can never be addressed by a
-/// fixed name alone. Each state is resolved by name first (a small list of common English
-/// and German synonyms) and by position otherwise, with the index clamped to what the
-/// button actually offers.
+/// The commands declare their states (see <see cref="ObsStates"/>), so the host creates them
+/// and a state can be addressed by its name directly. A button whose states were built by hand
+/// before that (or edited afterwards) simply does not match and stays untouched.
 /// </remarks>
 internal sealed class ObsStateReporter : IDisposable
 {
@@ -41,14 +40,6 @@ internal sealed class ObsStateReporter : IDisposable
 
     private static readonly string[] StudioModeCommands = ["System.ObsToggleStudioMode"];
 
-    private static readonly string[] InactiveNames =
-        ["Idle", "Stopped", "Off", "Inactive", "Aus", "Gestoppt", "Inaktiv"];
-
-    private static readonly string[] ActiveNames =
-        ["Recording", "Active", "On", "Running", "Rec", "An", "Ein", "Aktiv", "Aufnahme"];
-
-    private static readonly string[] PausedNames = ["Paused", "Pause", "Pausiert"];
-
     private readonly IPluginHost _host;
     private readonly IObsController _obs;
 
@@ -75,49 +66,40 @@ internal sealed class ObsStateReporter : IDisposable
 
     private void OnRecordStateChanged(ObsRecordState state)
     {
-        (int index, string[] names) = state switch
+        string target = state switch
         {
-            ObsRecordState.Recording => (1, ActiveNames),
-            ObsRecordState.Paused => (2, PausedNames),
-            _ => (0, InactiveNames)
+            ObsRecordState.Recording => ObsStates.Recording,
+            ObsRecordState.Paused => ObsStates.Paused,
+            _ => ObsStates.Idle
         };
 
-        Apply(RecordCommands, index, names);
+        Apply(RecordCommands, target);
     }
 
     private void OnReplayBufferActiveChanged(bool active) => ApplyToggle(ReplayCommands, active);
 
     private void OnVirtualCamActiveChanged(bool active) => ApplyToggle(VirtualCamCommands, active);
 
-    private void OnStreamActiveChanged(bool active) => ApplyToggle(StreamCommands, active);
+    private void OnStreamActiveChanged(bool active) =>
+        Apply(StreamCommands, active ? ObsStates.Live : ObsStates.Offline);
 
     private void OnStudioModeChanged(bool enabled) => ApplyToggle(StudioModeCommands, enabled);
 
     private void ApplyToggle(string[] commandNames, bool active) =>
-        Apply(commandNames, active ? 1 : 0, active ? ActiveNames : InactiveNames);
+        Apply(commandNames, active ? ObsStates.On : ObsStates.Off);
 
     /// <summary>
-    /// Selects the state to show on every given command's button: by one of
-    /// <paramref name="preferredNames"/> when the user named a state that way, by
-    /// <paramref name="index"/> otherwise.
+    /// Shows <paramref name="stateName"/> on every button bound to one of the given commands.
+    /// A button that does not offer that state (its states are the user's own) is left alone.
     /// </summary>
-    private void Apply(string[] commandNames, int index, string[] preferredNames)
+    private void Apply(string[] commandNames, string stateName)
     {
         foreach (string commandName in commandNames)
         {
             try
             {
-                IReadOnlyList<string> states = _host.GetButtonStates(commandName);
-                if (states.Count == 0)
-                    continue; // No stateful button bound to this command.
-
-                string? target = states.FirstOrDefault(
-                    state => preferredNames.Contains(state, StringComparer.OrdinalIgnoreCase));
-
-                // A three-state signal (paused) on a two-state button falls back to "active".
-                target ??= states[Math.Clamp(index, 0, states.Count - 1)];
-
-                _host.SetActiveButtonState(commandName, target);
+                if (!_host.SetActiveButtonState(commandName, stateName))
+                    continue; // No button bound to this command, or it already shows the state.
             }
             catch (Exception ex)
             {

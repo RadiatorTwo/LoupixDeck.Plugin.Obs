@@ -7,116 +7,123 @@ namespace LoupixDeck.Plugin.Obs;
 /// built-in commands so existing button assignments in <c>config.json</c>
 /// keep working.
 /// </summary>
-internal sealed class ObsStartRecordCommand(IObsController obs) : IPluginCommand
+internal sealed class ObsStartRecordCommand(IObsController obs) : ObsStatefulCommand
 {
-    public CommandDescriptor Descriptor { get; } = new()
+    public override CommandDescriptor Descriptor { get; } = new()
     {
         CommandName = "System.ObsStartRecord",
         DisplayName = "Start Recording",
         Group = "OBS",
         Icon = "\U000F044A", // mdi-record
-        Description = "Start recording"
+        Description = "Start recording",
+        States = ObsStates.Record
     };
 
-    public ButtonTargets SupportedTargets => ButtonTargets.All;
+    protected override IReadOnlyDictionary<string, ObsStateVisual> Visuals => ObsStates.RecordVisuals;
 
-    public Task Execute(CommandContext ctx) => obs.StartRecording();
+    public override Task Execute(CommandContext ctx) => obs.StartRecording();
 }
 
-internal sealed class ObsStopRecordCommand(IObsController obs) : IPluginCommand
+internal sealed class ObsStopRecordCommand(IObsController obs) : ObsStatefulCommand
 {
-    public CommandDescriptor Descriptor { get; } = new()
+    public override CommandDescriptor Descriptor { get; } = new()
     {
         CommandName = "System.ObsStopRecord",
         DisplayName = "Stop Recording",
         Group = "OBS",
         Icon = "\U000F04DB", // mdi-stop
-        Description = "Stop recording"
+        Description = "Stop recording",
+        States = ObsStates.Record
     };
 
-    public ButtonTargets SupportedTargets => ButtonTargets.All;
+    protected override IReadOnlyDictionary<string, ObsStateVisual> Visuals => ObsStates.RecordVisuals;
 
-    public Task Execute(CommandContext ctx) => obs.StopRecording();
+    public override Task Execute(CommandContext ctx) => obs.StopRecording();
 }
 
-internal sealed class ObsPauseRecordCommand(IObsController obs) : IPluginCommand
+internal sealed class ObsPauseRecordCommand(IObsController obs) : ObsStatefulCommand
 {
-    public CommandDescriptor Descriptor { get; } = new()
+    public override CommandDescriptor Descriptor { get; } = new()
     {
         CommandName = "System.ObsPauseRecord",
         DisplayName = "Pause Recording",
         Group = "OBS",
         Icon = "\U000F03E4", // mdi-pause
-        Description = "Pause or resume recording"
+        Description = "Pause or resume recording",
+        States = ObsStates.Record
     };
 
-    public ButtonTargets SupportedTargets => ButtonTargets.All;
+    protected override IReadOnlyDictionary<string, ObsStateVisual> Visuals => ObsStates.RecordVisuals;
 
-    public Task Execute(CommandContext ctx) => obs.PauseRecording();
+    public override Task Execute(CommandContext ctx) => obs.PauseRecording();
 }
 
-internal sealed class ObsVirtualCamCommand(IObsController obs) : IPluginCommand
+internal sealed class ObsVirtualCamCommand(IObsController obs) : ObsStatefulCommand
 {
-    public CommandDescriptor Descriptor { get; } = new()
+    public override CommandDescriptor Descriptor { get; } = new()
     {
         CommandName = "System.ObsVirtualCam",
         DisplayName = "Toggle Virtual Camera",
         Group = "OBS",
         Icon = "\U000F05A0", // mdi-webcam
-        Description = "Toggle the virtual camera"
+        Description = "Toggle the virtual camera",
+        States = ObsStates.Toggle
     };
 
-    public ButtonTargets SupportedTargets => ButtonTargets.All;
+    protected override IReadOnlyDictionary<string, ObsStateVisual> Visuals => ObsStates.VirtualCamVisuals;
 
-    public Task Execute(CommandContext ctx) => obs.ToggleVirtualCamera();
+    public override Task Execute(CommandContext ctx) => obs.ToggleVirtualCamera();
 }
 
-internal sealed class ObsStartReplayCommand(IObsController obs) : IPluginCommand
+internal sealed class ObsStartReplayCommand(IObsController obs) : ObsStatefulCommand
 {
-    public CommandDescriptor Descriptor { get; } = new()
+    public override CommandDescriptor Descriptor { get; } = new()
     {
         CommandName = "System.ObsStartReplay",
         DisplayName = "Start Replay",
         Group = "OBS",
         Icon = "\U000F040A", // mdi-play
-        Description = "Start the replay buffer"
+        Description = "Start the replay buffer",
+        States = ObsStates.Toggle
     };
 
-    public ButtonTargets SupportedTargets => ButtonTargets.All;
+    protected override IReadOnlyDictionary<string, ObsStateVisual> Visuals => ObsStates.ReplayVisuals;
 
-    public Task Execute(CommandContext ctx) => obs.StartReplayBuffer();
+    public override Task Execute(CommandContext ctx) => obs.StartReplayBuffer();
 }
 
-internal sealed class ObsStopReplayCommand(IObsController obs) : IPluginCommand
+internal sealed class ObsStopReplayCommand(IObsController obs) : ObsStatefulCommand
 {
-    public CommandDescriptor Descriptor { get; } = new()
+    public override CommandDescriptor Descriptor { get; } = new()
     {
         CommandName = "System.ObsStopReplay",
         DisplayName = "Stop Replay",
         Group = "OBS",
         Icon = "\U000F04DB", // mdi-stop
-        Description = "Stop the replay buffer"
+        Description = "Stop the replay buffer",
+        States = ObsStates.Toggle
     };
 
-    public ButtonTargets SupportedTargets => ButtonTargets.All;
+    protected override IReadOnlyDictionary<string, ObsStateVisual> Visuals => ObsStates.ReplayVisuals;
 
-    public Task Execute(CommandContext ctx) => obs.StopReplayBuffer();
+    public override Task Execute(CommandContext ctx) => obs.StopReplayBuffer();
 }
 
-internal sealed class ObsSaveReplayCommand(IObsController obs) : IPluginCommand
+internal sealed class ObsSaveReplayCommand(IObsController obs) : ObsStatefulCommand
 {
-    public CommandDescriptor Descriptor { get; } = new()
+    public override CommandDescriptor Descriptor { get; } = new()
     {
         CommandName = "System.ObsSaveReplay",
         DisplayName = "Save Replay",
         Group = "OBS",
         Icon = "\U000F0193", // mdi-content-save
-        Description = "Save the replay buffer"
+        Description = "Save the replay buffer",
+        States = ObsStates.Toggle
     };
 
-    public ButtonTargets SupportedTargets => ButtonTargets.All;
+    protected override IReadOnlyDictionary<string, ObsStateVisual> Visuals => ObsStates.ReplayVisuals;
 
-    public Task Execute(CommandContext ctx) => obs.SaveReplayBuffer();
+    public override Task Execute(CommandContext ctx) => obs.SaveReplayBuffer();
 }
 
 internal sealed class ObsSetSceneCommand(IObsController obs) : IPluginCommand
@@ -148,52 +155,55 @@ internal sealed class ObsSetSceneCommand(IObsController obs) : IPluginCommand
     }
 }
 
-internal sealed class ObsStartStreamCommand(IObsController obs) : IPluginCommand
+internal sealed class ObsStartStreamCommand(IObsController obs) : ObsStatefulCommand
 {
-    public CommandDescriptor Descriptor { get; } = new()
+    public override CommandDescriptor Descriptor { get; } = new()
     {
         CommandName = "System.ObsStartStream",
         DisplayName = "Start Streaming",
         Group = "OBS",
         Icon = "\U000F071B", // mdi-broadcast
-        Description = "Start streaming"
+        Description = "Start streaming",
+        States = ObsStates.Stream
     };
 
-    public ButtonTargets SupportedTargets => ButtonTargets.All;
+    protected override IReadOnlyDictionary<string, ObsStateVisual> Visuals => ObsStates.StreamVisuals;
 
-    public Task Execute(CommandContext ctx) => obs.StartStream();
+    public override Task Execute(CommandContext ctx) => obs.StartStream();
 }
 
-internal sealed class ObsStopStreamCommand(IObsController obs) : IPluginCommand
+internal sealed class ObsStopStreamCommand(IObsController obs) : ObsStatefulCommand
 {
-    public CommandDescriptor Descriptor { get; } = new()
+    public override CommandDescriptor Descriptor { get; } = new()
     {
         CommandName = "System.ObsStopStream",
         DisplayName = "Stop Streaming",
         Group = "OBS",
         Icon = "\U000F071C", // mdi-broadcast-off
-        Description = "Stop streaming"
+        Description = "Stop streaming",
+        States = ObsStates.Stream
     };
 
-    public ButtonTargets SupportedTargets => ButtonTargets.All;
+    protected override IReadOnlyDictionary<string, ObsStateVisual> Visuals => ObsStates.StreamVisuals;
 
-    public Task Execute(CommandContext ctx) => obs.StopStream();
+    public override Task Execute(CommandContext ctx) => obs.StopStream();
 }
 
-internal sealed class ObsToggleStudioModeCommand(IObsController obs) : IPluginCommand
+internal sealed class ObsToggleStudioModeCommand(IObsController obs) : ObsStatefulCommand
 {
-    public CommandDescriptor Descriptor { get; } = new()
+    public override CommandDescriptor Descriptor { get; } = new()
     {
         CommandName = "System.ObsToggleStudioMode",
         DisplayName = "Toggle Studio Mode",
         Group = "OBS",
         Icon = "\U000F0493", // mdi-view-split-vertical
-        Description = "Enable or disable studio mode"
+        Description = "Enable or disable studio mode",
+        States = ObsStates.Toggle
     };
 
-    public ButtonTargets SupportedTargets => ButtonTargets.All;
+    protected override IReadOnlyDictionary<string, ObsStateVisual> Visuals => ObsStates.StudioModeVisuals;
 
-    public Task Execute(CommandContext ctx) => obs.ToggleStudioMode();
+    public override Task Execute(CommandContext ctx) => obs.ToggleStudioMode();
 }
 
 internal sealed class ObsSetPreviewSceneCommand(IObsController obs) : IPluginCommand

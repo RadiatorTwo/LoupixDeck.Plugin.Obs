@@ -16,7 +16,7 @@
   <ItemGroup>
     <!-- The SDK is shared from the host at runtime — compile against it but do
          not copy it into the plugin folder. -->
-    <PackageReference Include="LoupixDeck.PluginSdk" Version="1.17.0">
+    <PackageReference Include="LoupixDeck.PluginSdk" Version="1.21.0">
       <ExcludeAssets>runtime</ExcludeAssets>
     </PackageReference>
     <PackageReference Include="obs-websocket-dotnet" Version="5.0.1" />

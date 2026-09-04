@@ -185,7 +185,7 @@ public sealed class ObsController : IObsController
     public async Task PauseRecording()
     {
         if (await CheckConnection().ConfigureAwait(false))
-            Guarded(() => _obs.PauseRecord(), "pausing recording");
+            Guarded(() => _obs.ToggleRecordPause(), "pausing or resuming recording");
     }
 
     public async Task StartReplayBuffer()

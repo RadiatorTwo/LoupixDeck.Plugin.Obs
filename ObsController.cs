@@ -4,9 +4,35 @@ using OBSWebsocketDotNet.Types;
 
 namespace LoupixDeck.Plugin.Obs;
 
+/// <summary>The three recording states OBS can be in.</summary>
+public enum ObsRecordState
+{
+    Stopped,
+    Recording,
+    Paused
+}
+
 /// <summary>Thin wrapper over obs-websocket-dotnet used by the OBS plugin.</summary>
 public interface IObsController
 {
+    /// <summary>Raised when the websocket connection is established or lost.</summary>
+    event Action<bool> ConnectionChanged;
+
+    /// <summary>Raised when OBS starts, stops, pauses or resumes recording.</summary>
+    event Action<ObsRecordState> RecordStateChanged;
+
+    /// <summary>Raised when the replay buffer is started or stopped.</summary>
+    event Action<bool> ReplayBufferActiveChanged;
+
+    /// <summary>Raised when the virtual camera is started or stopped.</summary>
+    event Action<bool> VirtualCamActiveChanged;
+
+    /// <summary>Raised when streaming is started or stopped.</summary>
+    event Action<bool> StreamActiveChanged;
+
+    /// <summary>Raised when studio mode is enabled or disabled.</summary>
+    event Action<bool> StudioModeChanged;
+
     /// <summary>Sets the connection parameters used by subsequent connects.</summary>
     void Configure(string ip, int port, string password);
 
@@ -39,6 +65,115 @@ public sealed class ObsController : IObsController
     private string _password = string.Empty;
 
     private string Url => $"ws://{_ip}:{_port}";
+
+    public event Action<bool>? ConnectionChanged;
+    public event Action<ObsRecordState>? RecordStateChanged;
+    public event Action<bool>? ReplayBufferActiveChanged;
+    public event Action<bool>? VirtualCamActiveChanged;
+    public event Action<bool>? StreamActiveChanged;
+    public event Action<bool>? StudioModeChanged;
+
+    /// <summary>
+    /// Subscribes to the OBS state events once, for the lifetime of this controller.
+    /// Doing it per connect would stack up duplicate handlers on every reconnect.
+    /// </summary>
+    public ObsController()
+    {
+        _obs.Connected += (_, _) =>
+        {
+            Raise(ConnectionChanged, true);
+            // Off the websocket callback thread: the sync calls back into OBS.
+            _ = Task.Run(SyncStateAsync);
+        };
+
+        _obs.Disconnected += (_, _) => ReportDisconnected();
+
+        _obs.RecordStateChanged += (_, e) =>
+        {
+            ObsRecordState? state = e.OutputState.State switch
+            {
+                OutputState.OBS_WEBSOCKET_OUTPUT_STARTED => ObsRecordState.Recording,
+                OutputState.OBS_WEBSOCKET_OUTPUT_RESUMED => ObsRecordState.Recording,
+                OutputState.OBS_WEBSOCKET_OUTPUT_PAUSED => ObsRecordState.Paused,
+                OutputState.OBS_WEBSOCKET_OUTPUT_STOPPED => ObsRecordState.Stopped,
+                // STARTING / STOPPING are transitional — wait for the final state.
+                _ => null
+            };
+
+            if (state.HasValue)
+                Raise(RecordStateChanged, state.Value);
+        };
+
+        _obs.ReplayBufferStateChanged += (_, e) => RaiseOnFinalState(ReplayBufferActiveChanged, e.OutputState);
+        _obs.VirtualcamStateChanged += (_, e) => RaiseOnFinalState(VirtualCamActiveChanged, e.OutputState);
+        _obs.StreamStateChanged += (_, e) => RaiseOnFinalState(StreamActiveChanged, e.OutputState);
+        _obs.StudioModeStateChanged += (_, e) => Raise(StudioModeChanged, e.StudioModeEnabled);
+    }
+
+    /// <summary>
+    /// Reads the current state of every tracked output and republishes it. Called after a
+    /// successful connect so the deck shows the truth even when OBS was already recording
+    /// (or LoupixDeck was restarted mid-session).
+    /// </summary>
+    private async Task SyncStateAsync()
+    {
+        try
+        {
+            RecordingStatus record = _obs.GetRecordStatus();
+            Raise(RecordStateChanged, record.IsRecording
+                ? (record.IsRecordingPaused ? ObsRecordState.Paused : ObsRecordState.Recording)
+                : ObsRecordState.Stopped);
+
+            Raise(ReplayBufferActiveChanged, _obs.GetReplayBufferStatus());
+            Raise(VirtualCamActiveChanged, _obs.GetVirtualCamStatus().IsActive);
+            Raise(StreamActiveChanged, _obs.GetStreamStatus().IsActive);
+            Raise(StudioModeChanged, _obs.GetStudioModeEnabled());
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error reading initial OBS state: {ex.Message}");
+        }
+
+        await Task.CompletedTask.ConfigureAwait(false);
+    }
+
+    /// <summary>Reports every tracked output as inactive — nothing is running once OBS is gone.</summary>
+    private void ReportDisconnected()
+    {
+        Raise(ConnectionChanged, false);
+        Raise(RecordStateChanged, ObsRecordState.Stopped);
+        Raise(ReplayBufferActiveChanged, false);
+        Raise(VirtualCamActiveChanged, false);
+        Raise(StreamActiveChanged, false);
+        Raise(StudioModeChanged, false);
+    }
+
+    private static void RaiseOnFinalState(Action<bool>? handler, OutputStateChanged state)
+    {
+        switch (state.State)
+        {
+            case OutputState.OBS_WEBSOCKET_OUTPUT_STARTED:
+                Raise(handler, true);
+                break;
+            case OutputState.OBS_WEBSOCKET_OUTPUT_STOPPED:
+                Raise(handler, false);
+                break;
+            // STARTING / STOPPING are transitional — wait for the final state.
+        }
+    }
+
+    /// <summary>Invokes a state handler without letting a subscriber's failure reach the websocket.</summary>
+    private static void Raise<T>(Action<T>? handler, T value)
+    {
+        try
+        {
+            handler?.Invoke(value);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error dispatching OBS state change: {ex.Message}");
+        }
+    }
 
     public void Configure(string ip, int port, string password)
     {

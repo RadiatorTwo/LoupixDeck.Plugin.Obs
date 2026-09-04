@@ -14,6 +14,7 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
 
     private readonly ObsController _controller = new();
     private IPluginHost? _host;
+    private ObsStateReporter? _stateReporter;
 
     public override PluginMetadata Metadata { get; } = new()
     {
@@ -29,11 +30,14 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
     {
         _host = host;
         ApplySettings();
+        _stateReporter = new ObsStateReporter(host, _controller);
         _controller.Connect();
     }
 
     public override void Shutdown()
     {
+        _stateReporter?.Dispose();
+        _stateReporter = null;
         _controller.Disconnect();
     }
 

@@ -44,24 +44,37 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
 
     public override IEnumerable<IPluginCommand> GetCommands()
     {
+        // The host lists commands in this order, so they are grouped by what they control and
+        // each group leads with its toggle, followed by the discrete actions.
         return
         [
+            // Recording
             new ObsToggleRecordCommand(_controller),
             new ObsStartRecordCommand(_controller),
             new ObsStopRecordCommand(_controller),
             new ObsPauseRecordCommand(_controller),
-            new ObsVirtualCamCommand(_controller),
+
+            // Replay buffer
             new ObsToggleReplayCommand(_controller),
             new ObsStartReplayCommand(_controller),
             new ObsStopReplayCommand(_controller),
             new ObsSaveReplayCommand(_controller),
-            new ObsSetSceneCommand(_controller),
+
+            // Streaming
             new ObsToggleStreamCommand(_controller),
             new ObsStartStreamCommand(_controller),
             new ObsStopStreamCommand(_controller),
+
+            // Virtual camera
+            new ObsVirtualCamCommand(_controller),
+
+            // Studio mode
             new ObsToggleStudioModeCommand(_controller),
             new ObsSetPreviewSceneCommand(_controller),
             new ObsTriggerTransitionCommand(_controller),
+
+            // Scenes, audio and sources — surfaced through the dynamic submenus
+            new ObsSetSceneCommand(_controller),
             new ObsMuteInputCommand(_controller),
             new ObsUnmuteInputCommand(_controller),
             new ObsToggleInputMuteCommand(_controller),

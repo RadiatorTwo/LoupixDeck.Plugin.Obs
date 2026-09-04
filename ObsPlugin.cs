@@ -1,4 +1,5 @@
 using LoupixDeck.PluginSdk;
+using OBSWebsocketDotNet.Types;
 
 namespace LoupixDeck.Plugin.Obs;
 
@@ -14,13 +15,14 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
 
     private readonly ObsController _controller = new();
     private IPluginHost? _host;
+    private ObsStateReporter? _stateReporter;
 
     public override PluginMetadata Metadata { get; } = new()
     {
         Id = "obs",
         Name = "OBS Studio",
-        Version = new Version(1, 0, 0),
-        SdkVersion = new Version(1, 16, 0),
+        Version = new Version(1, 2, 0),
+        SdkVersion = new Version(1, 21, 0),
         Author = "RadiatorTwo",
         Description = "Control OBS Studio (recording, replay buffer, virtual camera, scenes) via obs-websocket."
     };
@@ -29,26 +31,56 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
     {
         _host = host;
         ApplySettings();
+        _stateReporter = new ObsStateReporter(host, _controller);
         _controller.Connect();
     }
 
     public override void Shutdown()
     {
+        _stateReporter?.Dispose();
+        _stateReporter = null;
         _controller.Disconnect();
     }
 
     public override IEnumerable<IPluginCommand> GetCommands()
     {
+        // The host lists commands in this order, so they are grouped by what they control and
+        // each group leads with its toggle, followed by the discrete actions.
         return
         [
+            // Recording
+            new ObsToggleRecordCommand(_controller),
             new ObsStartRecordCommand(_controller),
             new ObsStopRecordCommand(_controller),
             new ObsPauseRecordCommand(_controller),
-            new ObsVirtualCamCommand(_controller),
+
+            // Replay buffer
+            new ObsToggleReplayCommand(_controller),
             new ObsStartReplayCommand(_controller),
             new ObsStopReplayCommand(_controller),
             new ObsSaveReplayCommand(_controller),
-            new ObsSetSceneCommand(_controller)
+
+            // Streaming
+            new ObsToggleStreamCommand(_controller),
+            new ObsStartStreamCommand(_controller),
+            new ObsStopStreamCommand(_controller),
+
+            // Virtual camera
+            new ObsVirtualCamCommand(_controller),
+
+            // Studio mode
+            new ObsToggleStudioModeCommand(_controller),
+            new ObsSetPreviewSceneCommand(_controller),
+            new ObsTriggerTransitionCommand(_controller),
+
+            // Scenes, audio and sources — surfaced through the dynamic submenus
+            new ObsSetSceneCommand(_controller),
+            new ObsMuteInputCommand(_controller),
+            new ObsUnmuteInputCommand(_controller),
+            new ObsToggleInputMuteCommand(_controller),
+            new ObsShowSourceCommand(_controller),
+            new ObsHideSourceCommand(_controller),
+            new ObsToggleSourceCommand(_controller)
         ];
     }
 
@@ -63,36 +95,137 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
         }
     ];
 
-    // ───────── IMenuContributor — dynamic "Scenes" submenu ─────────
+    // ───────── IMenuContributor — dynamic submenus ─────────
 
     public async Task<IReadOnlyList<MenuNode>> GetMenuNodes(ButtonTargets target)
     {
-        var scenesChildren = new List<MenuNode>();
+        List<SceneBasicInfo> scenes;
 
         try
         {
-            var scenes = await _controller.GetScenes();
-            foreach (var scene in scenes)
-            {
-                // The scene name is the command's first parameter; the host's
-                // command builder fills it from the node name.
-                scenesChildren.Add(new MenuNode
+            scenes = await _controller.GetScenes();
+        }
+        catch (Exception ex)
+        {
+            return
+            [
+                new MenuNode
                 {
-                    Name = scene.Name,
-                    CommandName = "System.ObsSetScene"
+                    Name = "OBS",
+                    Children = [new MenuNode { Name = $"OBS not connected: {ex.Message}" }]
+                }
+            ];
+        }
+
+        // Returned under the "OBS" group so the host merges it into the OBS
+        // group built from the static commands.
+        return
+        [
+            new MenuNode
+            {
+                Name = "OBS",
+                Children =
+                [
+                    BuildSceneFolder("Scenes", "System.ObsSetScene", scenes),
+                    BuildSceneFolder("Preview Scenes", "System.ObsSetPreviewScene", scenes),
+                    await BuildAudioFolder(),
+                    await BuildSourcesFolder(scenes)
+                ]
+            }
+        ];
+    }
+
+    /// <summary>One leaf per scene; the scene name is the command's only parameter.</summary>
+    private static MenuNode BuildSceneFolder(string folderName, string commandName,
+        List<SceneBasicInfo> scenes)
+    {
+        List<MenuNode> children = scenes
+            .Select(scene => new MenuNode
+            {
+                Name = scene.Name,
+                CommandName = commandName,
+                Parameters = new Dictionary<string, string> { ["SceneName"] = scene.Name }
+            })
+            .ToList();
+
+        return new MenuNode { Name = folderName, Children = children };
+    }
+
+    /// <summary>One folder per input, offering mute / unmute / toggle.</summary>
+    private async Task<MenuNode> BuildAudioFolder()
+    {
+        List<MenuNode> children = [];
+
+        try
+        {
+            foreach (string input in await _controller.GetInputNames())
+            {
+                Dictionary<string, string> parameters = new() { ["InputName"] = input };
+
+                children.Add(new MenuNode
+                {
+                    Name = input,
+                    Children =
+                    [
+                        new MenuNode { Name = "Mute", CommandName = "System.ObsMuteInput", Parameters = parameters },
+                        new MenuNode { Name = "Unmute", CommandName = "System.ObsUnmuteInput", Parameters = parameters },
+                        new MenuNode
+                        {
+                            Name = "Toggle Mute",
+                            CommandName = "System.ObsToggleInputMute",
+                            Parameters = parameters
+                        }
+                    ]
                 });
             }
         }
         catch (Exception ex)
         {
-            scenesChildren.Add(new MenuNode { Name = $"OBS not connected: {ex.Message}" });
+            children.Add(new MenuNode { Name = $"Could not read inputs: {ex.Message}" });
         }
 
-        var scenesFolder = new MenuNode { Name = "Scenes", Children = scenesChildren };
+        return new MenuNode { Name = "Audio", Children = children };
+    }
 
-        // Returned under the "OBS" group so the host merges it into the OBS
-        // group built from the static commands.
-        return [new MenuNode { Name = "OBS", Children = [scenesFolder] }];
+    /// <summary>One folder per scene, each holding a folder per source with show / hide / toggle.</summary>
+    private async Task<MenuNode> BuildSourcesFolder(List<SceneBasicInfo> scenes)
+    {
+        List<MenuNode> sceneFolders = [];
+
+        foreach (SceneBasicInfo scene in scenes)
+        {
+            List<MenuNode> sourceFolders = [];
+
+            try
+            {
+                foreach (string source in await _controller.GetSourceNames(scene.Name))
+                {
+                    // Only the first parameter is filled from a menu selection, so the
+                    // scene stays at its "current program scene" default; the scene folders
+                    // are there to find the source, not to pin it.
+                    Dictionary<string, string> parameters = new() { ["SourceName"] = source };
+
+                    sourceFolders.Add(new MenuNode
+                    {
+                        Name = source,
+                        Children =
+                        [
+                            new MenuNode { Name = "Show", CommandName = "System.ObsShowSource", Parameters = parameters },
+                            new MenuNode { Name = "Hide", CommandName = "System.ObsHideSource", Parameters = parameters },
+                            new MenuNode { Name = "Toggle", CommandName = "System.ObsToggleSource", Parameters = parameters }
+                        ]
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                sourceFolders.Add(new MenuNode { Name = $"Could not read sources: {ex.Message}" });
+            }
+
+            sceneFolders.Add(new MenuNode { Name = scene.Name, Children = sourceFolders });
+        }
+
+        return new MenuNode { Name = "Sources", Children = sceneFolders };
     }
 
     // ───────── IPluginSettingsPage — connection settings ─────────

@@ -86,11 +86,25 @@ public interface IObsController
 /// <inheritdoc cref="IObsController"/>
 public sealed class ObsController : IObsController
 {
-    private readonly OBSWebsocket _obs = new();
+    private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(5);
+
+    private readonly object _gate = new();
+
+    // The connection currently in use, or null. A fresh OBSWebsocket is created for every
+    // connect: the library keeps the password and the socket in shared fields, so reusing one
+    // instance across overlapping connects sends the Identify of one socket over another
+    // (with the password already cleared), which OBS answers with "Authentication failed"
+    // or "already Identified".
+    private volatile OBSWebsocket? _obs;
+    private volatile bool _identified;
+    private Task<bool>? _connectTask;
+    private int _generation;
+    private string _lastError = "OBS is not connected.";
 
     private string _ip = "127.0.0.1";
     private int _port = 4455;
     private string _password = string.Empty;
+    private bool _settingsChanged;
 
     private string Url => $"ws://{_ip}:{_port}";
 
@@ -105,22 +119,36 @@ public sealed class ObsController : IObsController
     public event Action<bool>? StudioModeChanged;
 
     /// <summary>
-    /// Subscribes to the OBS state events once, for the lifetime of this controller.
-    /// Doing it per connect would stack up duplicate handlers on every reconnect.
+    /// Subscribes to the events of one connection. Every handler ignores a connection that has
+    /// since been replaced, so a late event from a closed socket cannot touch the current state.
     /// </summary>
-    public ObsController()
+    private void Attach(OBSWebsocket obs)
     {
-        _obs.Connected += (_, _) =>
+        obs.Connected += (_, _) =>
         {
+            if (!ReferenceEquals(obs, _obs))
+                return;
+
+            _identified = true;
             Raise(ConnectionChanged, true);
             // Off the websocket callback thread: the sync calls back into OBS.
-            _ = Task.Run(SyncState);
+            _ = Task.Run(() => SyncState(obs));
         };
 
-        _obs.Disconnected += (_, _) => ReportDisconnected();
-
-        _obs.RecordStateChanged += (_, e) =>
+        obs.Disconnected += (_, _) =>
         {
+            if (!ReferenceEquals(obs, _obs))
+                return;
+
+            _identified = false;
+            ReportDisconnected();
+        };
+
+        obs.RecordStateChanged += (_, e) =>
+        {
+            if (!ReferenceEquals(obs, _obs))
+                return;
+
             ObsRecordState? state = e.OutputState.State switch
             {
                 OutputState.OBS_WEBSOCKET_OUTPUT_STARTED => ObsRecordState.Recording,
@@ -135,10 +163,26 @@ public sealed class ObsController : IObsController
                 Raise(RecordStateChanged, state.Value);
         };
 
-        _obs.ReplayBufferStateChanged += (_, e) => RaiseOnFinalState(ReplayBufferActiveChanged, e.OutputState);
-        _obs.VirtualcamStateChanged += (_, e) => RaiseOnFinalState(VirtualCamActiveChanged, e.OutputState);
-        _obs.StreamStateChanged += (_, e) => RaiseOnFinalState(StreamActiveChanged, e.OutputState);
-        _obs.StudioModeStateChanged += (_, e) => Raise(StudioModeChanged, e.StudioModeEnabled);
+        obs.ReplayBufferStateChanged += (_, e) =>
+        {
+            if (ReferenceEquals(obs, _obs))
+                RaiseOnFinalState(ReplayBufferActiveChanged, e.OutputState);
+        };
+        obs.VirtualcamStateChanged += (_, e) =>
+        {
+            if (ReferenceEquals(obs, _obs))
+                RaiseOnFinalState(VirtualCamActiveChanged, e.OutputState);
+        };
+        obs.StreamStateChanged += (_, e) =>
+        {
+            if (ReferenceEquals(obs, _obs))
+                RaiseOnFinalState(StreamActiveChanged, e.OutputState);
+        };
+        obs.StudioModeStateChanged += (_, e) =>
+        {
+            if (ReferenceEquals(obs, _obs))
+                Raise(StudioModeChanged, e.StudioModeEnabled);
+        };
     }
 
     /// <summary>
@@ -146,19 +190,19 @@ public sealed class ObsController : IObsController
     /// successful connect so the deck shows the truth even when OBS was already recording
     /// (or LoupixDeck was restarted mid-session).
     /// </summary>
-    private void SyncState()
+    private void SyncState(OBSWebsocket obs)
     {
         try
         {
-            RecordingStatus record = _obs.GetRecordStatus();
+            RecordingStatus record = obs.GetRecordStatus();
             Raise(RecordStateChanged, record.IsRecording
                 ? (record.IsRecordingPaused ? ObsRecordState.Paused : ObsRecordState.Recording)
                 : ObsRecordState.Stopped);
 
-            Raise(ReplayBufferActiveChanged, _obs.GetReplayBufferStatus());
-            Raise(VirtualCamActiveChanged, _obs.GetVirtualCamStatus().IsActive);
-            Raise(StreamActiveChanged, _obs.GetStreamStatus().IsActive);
-            Raise(StudioModeChanged, _obs.GetStudioModeEnabled());
+            Raise(ReplayBufferActiveChanged, obs.GetReplayBufferStatus());
+            Raise(VirtualCamActiveChanged, obs.GetVirtualCamStatus().IsActive);
+            Raise(StreamActiveChanged, obs.GetStreamStatus().IsActive);
+            Raise(StudioModeChanged, obs.GetStudioModeEnabled());
         }
         catch (Exception ex)
         {
@@ -206,32 +250,155 @@ public sealed class ObsController : IObsController
 
     public void Configure(string ip, int port, string password)
     {
-        _ip = string.IsNullOrWhiteSpace(ip) ? "127.0.0.1" : ip;
-        _port = port > 0 ? port : 4455;
-        _password = password ?? string.Empty;
+        string newIp = string.IsNullOrWhiteSpace(ip) ? "127.0.0.1" : ip;
+        int newPort = port > 0 ? port : 4455;
+        string newPassword = password ?? string.Empty;
+
+        lock (_gate)
+        {
+            if (newIp == _ip && newPort == _port && newPassword == _password)
+                return;
+
+            _ip = newIp;
+            _port = newPort;
+            _password = newPassword;
+            _settingsChanged = true;
+        }
     }
 
+    /// <summary>
+    /// Connects in the background. An established connection is only replaced when the
+    /// connection settings changed, so saving or testing unchanged settings keeps the session.
+    /// </summary>
     public void Connect()
     {
-        if (_obs.IsConnected)
-            Disconnect();
-
-        // Fire-and-forget, but routed through a guarded async method so a failed
-        // connection never escapes as an unobserved task exception.
-        _ = ConnectGuardedAsync();
+        _ = EnsureConnectedAsync(ConsumeSettingsChanged());
     }
 
-    private async Task ConnectGuardedAsync()
+    private bool ConsumeSettingsChanged()
     {
+        lock (_gate)
+        {
+            bool changed = _settingsChanged;
+            _settingsChanged = false;
+            return changed;
+        }
+    }
+
+    /// <summary>
+    /// Returns the connect attempt every caller shares. While one is running, callers join it
+    /// instead of starting another; <paramref name="reconnect"/> queues a new attempt after it.
+    /// The returned task never faults — false means not connected, see <see cref="_lastError"/>.
+    /// </summary>
+    private Task<bool> EnsureConnectedAsync(bool reconnect)
+    {
+        lock (_gate)
+        {
+            Task<bool>? pending = _connectTask is { IsCompleted: false } ? _connectTask : null;
+
+            if (!reconnect)
+            {
+                if (pending != null)
+                    return pending;
+
+                if (_identified)
+                    return Task.FromResult(true);
+            }
+
+            return _connectTask = ConnectAfterAsync(pending, _generation);
+        }
+    }
+
+    private async Task<bool> ConnectAfterAsync(Task<bool>? previous, int generation)
+    {
+        if (previous != null)
+            await previous.ConfigureAwait(false);
+
+        return await ConnectCoreAsync(generation).ConfigureAwait(false);
+    }
+
+    private async Task<bool> ConnectCoreAsync(int generation)
+    {
+        OBSWebsocket? obs = null;
+
         try
         {
-            if (await IsObsReachableAsync(CancellationToken.None).ConfigureAwait(false))
-                _obs.ConnectAsync(Url, _password);
+            string url;
+            string password;
+            lock (_gate)
+            {
+                url = Url;
+                password = _password;
+            }
+
+            if (!await IsObsReachableAsync(CancellationToken.None).ConfigureAwait(false))
+            {
+                _lastError = $"OBS is not reachable at {url}.";
+                return false;
+            }
+
+            obs = new OBSWebsocket();
+            OBSWebsocket? previous;
+
+            lock (_gate)
+            {
+                // Disconnect() was called while probing: the plugin is shutting down.
+                if (generation != _generation)
+                    return false;
+
+                previous = _obs;
+                _obs = obs;
+                _identified = false;
+            }
+
+            previous?.Disconnect();
+
+            // Attach first so the state handlers have marked the connection identified
+            // before the waiter below resumes.
+            Attach(obs);
+
+            var result = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            obs.Connected += (_, _) => result.TrySetResult(null);
+            obs.Disconnected += (_, info) => result.TrySetResult(info.DisconnectReason ?? "OBS disconnected.");
+
+            obs.ConnectAsync(url, password);
+
+            string? error;
+            try
+            {
+                error = await result.Task.WaitAsync(ConnectTimeout).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                error = $"OBS at {url} did not answer.";
+            }
+
+            if (error == null && ReferenceEquals(obs, _obs))
+                return true;
+
+            _lastError = error ?? "OBS was disconnected.";
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error connecting to OBS: {ex.Message}");
+            _lastError = ex.Message;
         }
+
+        if (obs != null)
+        {
+            lock (_gate)
+            {
+                if (ReferenceEquals(obs, _obs))
+                {
+                    _obs = null;
+                    _identified = false;
+                }
+            }
+
+            obs.Disconnect();
+        }
+
+        Console.WriteLine($"Error connecting to OBS: {_lastError}");
+        return false;
     }
 
     /// <summary>
@@ -261,141 +428,114 @@ public sealed class ObsController : IObsController
 
     public async Task ConnectAndWaitAsync(CancellationToken cancellationToken = default)
     {
-        if (_obs.IsConnected)
-            return;
+        bool connected = await EnsureConnectedAsync(ConsumeSettingsChanged())
+            .WaitAsync(cancellationToken).ConfigureAwait(false);
 
-        if (!await IsObsReachableAsync(cancellationToken).ConfigureAwait(false))
-            throw new InvalidOperationException($"OBS is not reachable at {Url}.");
-
-        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        _obs.Connected += OnConnected;
-        _obs.Disconnected += OnDisconnected;
-
-        _obs.ConnectAsync(Url, _password);
-
-        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
-            timeoutCts.Token, cancellationToken);
-
-        await using (linkedCts.Token.Register(() => tcs.TrySetCanceled(linkedCts.Token)))
-        {
-            await tcs.Task.ConfigureAwait(false);
-        }
-
-        return;
-
-        void OnConnected(object? _, EventArgs __)
-        {
-            Unsubscribe();
-            tcs.TrySetResult();
-        }
-
-        void OnDisconnected(object? _, ObsDisconnectionInfo info)
-        {
-            Unsubscribe();
-            tcs.TrySetException(new InvalidOperationException(info.DisconnectReason ?? "OBS disconnected."));
-        }
-
-        void Unsubscribe()
-        {
-            _obs.Connected -= OnConnected;
-            _obs.Disconnected -= OnDisconnected;
-        }
+        if (!connected)
+            throw new InvalidOperationException(_lastError);
     }
 
     public void Disconnect()
     {
-        if (_obs.IsConnected)
-            _obs.Disconnect();
+        OBSWebsocket? obs;
+        bool wasIdentified;
+
+        lock (_gate)
+        {
+            _generation++;
+            obs = _obs;
+            wasIdentified = _identified;
+            _obs = null;
+            _identified = false;
+        }
+
+        if (obs == null)
+            return;
+
+        obs.Disconnect();
+
+        // The handlers ignore the replaced connection, so report the loss here.
+        if (wasIdentified)
+            ReportDisconnected();
     }
 
-    private async Task<bool> CheckConnection()
+    /// <summary>The identified connection, connecting first when needed; null when OBS cannot be reached.</summary>
+    private async Task<OBSWebsocket?> GetConnectionAsync()
     {
-        if (_obs.IsConnected)
-            return true;
+        if (!await EnsureConnectedAsync(reconnect: false).ConfigureAwait(false))
+            return null;
 
-        try
-        {
-            await ConnectAndWaitAsync().ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error connecting to OBS: {ex.Message}");
-            return false;
-        }
-
-        return _obs.IsConnected;
+        return _identified ? _obs : null;
     }
 
     public async Task ToggleVirtualCamera()
     {
-        if (await CheckConnection().ConfigureAwait(false))
-            Guarded(() => _obs.ToggleVirtualCam(), "toggling virtual camera");
+        if (await GetConnectionAsync().ConfigureAwait(false) is { } obs)
+            Guarded(() => obs.ToggleVirtualCam(), "toggling virtual camera");
     }
 
     public async Task ToggleRecording()
     {
-        if (await CheckConnection().ConfigureAwait(false))
-            Guarded(() => _obs.ToggleRecord(), "toggling recording");
+        if (await GetConnectionAsync().ConfigureAwait(false) is { } obs)
+            Guarded(() => obs.ToggleRecord(), "toggling recording");
     }
 
     public async Task StartRecording()
     {
-        if (await CheckConnection().ConfigureAwait(false))
-            Guarded(() => _obs.StartRecord(), "starting recording");
+        if (await GetConnectionAsync().ConfigureAwait(false) is { } obs)
+            Guarded(() => obs.StartRecord(), "starting recording");
     }
 
     public async Task StopRecording()
     {
-        if (await CheckConnection().ConfigureAwait(false))
-            Guarded(() => _obs.StopRecord(), "stopping recording");
+        if (await GetConnectionAsync().ConfigureAwait(false) is { } obs)
+            Guarded(() => obs.StopRecord(), "stopping recording");
     }
 
     public async Task PauseRecording()
     {
-        if (await CheckConnection().ConfigureAwait(false))
-            Guarded(() => _obs.ToggleRecordPause(), "pausing or resuming recording");
+        if (await GetConnectionAsync().ConfigureAwait(false) is { } obs)
+            Guarded(() => obs.ToggleRecordPause(), "pausing or resuming recording");
     }
 
     public async Task ToggleReplayBuffer()
     {
-        if (await CheckConnection().ConfigureAwait(false))
-            Guarded(() => _obs.ToggleReplayBuffer(), "toggling the replay buffer");
+        if (await GetConnectionAsync().ConfigureAwait(false) is { } obs)
+            Guarded(() => obs.ToggleReplayBuffer(), "toggling the replay buffer");
     }
 
     public async Task StartReplayBuffer()
     {
-        if (await CheckConnection().ConfigureAwait(false))
-            Guarded(() => _obs.StartReplayBuffer(), "starting replay buffer");
+        if (await GetConnectionAsync().ConfigureAwait(false) is { } obs)
+            Guarded(() => obs.StartReplayBuffer(), "starting replay buffer");
     }
 
     public async Task StopReplayBuffer()
     {
-        if (await CheckConnection().ConfigureAwait(false))
-            Guarded(() => _obs.StopReplayBuffer(), "stopping replay buffer");
+        if (await GetConnectionAsync().ConfigureAwait(false) is { } obs)
+            Guarded(() => obs.StopReplayBuffer(), "stopping replay buffer");
     }
 
     public async Task SaveReplayBuffer()
     {
-        if (await CheckConnection().ConfigureAwait(false))
-            Guarded(() => _obs.SaveReplayBuffer(), "saving replay buffer");
+        if (await GetConnectionAsync().ConfigureAwait(false) is { } obs)
+            Guarded(() => obs.SaveReplayBuffer(), "saving replay buffer");
     }
 
     public async Task SetScene(string sceneName)
     {
-        if (await CheckConnection().ConfigureAwait(false))
-            Guarded(() => _obs.SetCurrentProgramScene(sceneName), $"setting scene '{sceneName}'");
+        if (await GetConnectionAsync().ConfigureAwait(false) is { } obs)
+            Guarded(() => obs.SetCurrentProgramScene(sceneName), $"setting scene '{sceneName}'");
     }
 
     public async Task<List<SceneBasicInfo>> GetScenes()
     {
-        if (!await CheckConnection().ConfigureAwait(false))
+        if (await GetConnectionAsync().ConfigureAwait(false) is not { } obs)
             return [];
 
         try
         {
-            return _obs.GetSceneList().Scenes;
+            return obs.GetSceneList().Scenes;
         }
         catch (Exception ex)
         {
@@ -406,61 +546,61 @@ public sealed class ObsController : IObsController
 
     public async Task ToggleStream()
     {
-        if (await CheckConnection().ConfigureAwait(false))
-            Guarded(() => _obs.ToggleStream(), "toggling the stream");
+        if (await GetConnectionAsync().ConfigureAwait(false) is { } obs)
+            Guarded(() => obs.ToggleStream(), "toggling the stream");
     }
 
     public async Task StartStream()
     {
-        if (await CheckConnection().ConfigureAwait(false))
-            Guarded(() => _obs.StartStream(), "starting the stream");
+        if (await GetConnectionAsync().ConfigureAwait(false) is { } obs)
+            Guarded(() => obs.StartStream(), "starting the stream");
     }
 
     public async Task StopStream()
     {
-        if (await CheckConnection().ConfigureAwait(false))
-            Guarded(() => _obs.StopStream(), "stopping the stream");
+        if (await GetConnectionAsync().ConfigureAwait(false) is { } obs)
+            Guarded(() => obs.StopStream(), "stopping the stream");
     }
 
     public async Task ToggleStudioMode()
     {
-        if (await CheckConnection().ConfigureAwait(false))
-            Guarded(() => _obs.SetStudioModeEnabled(!_obs.GetStudioModeEnabled()), "toggling studio mode");
+        if (await GetConnectionAsync().ConfigureAwait(false) is { } obs)
+            Guarded(() => obs.SetStudioModeEnabled(!obs.GetStudioModeEnabled()), "toggling studio mode");
     }
 
     public async Task SetPreviewScene(string sceneName)
     {
-        if (await CheckConnection().ConfigureAwait(false))
-            Guarded(() => _obs.SetCurrentPreviewScene(sceneName), $"setting preview scene '{sceneName}'");
+        if (await GetConnectionAsync().ConfigureAwait(false) is { } obs)
+            Guarded(() => obs.SetCurrentPreviewScene(sceneName), $"setting preview scene '{sceneName}'");
     }
 
     public async Task TriggerTransition()
     {
-        if (await CheckConnection().ConfigureAwait(false))
-            Guarded(() => _obs.TriggerStudioModeTransition(), "triggering the studio mode transition");
+        if (await GetConnectionAsync().ConfigureAwait(false) is { } obs)
+            Guarded(() => obs.TriggerStudioModeTransition(), "triggering the studio mode transition");
     }
 
     public async Task SetInputMuted(string inputName, bool muted)
     {
-        if (await CheckConnection().ConfigureAwait(false))
-            Guarded(() => _obs.SetInputMute(inputName, muted),
+        if (await GetConnectionAsync().ConfigureAwait(false) is { } obs)
+            Guarded(() => obs.SetInputMute(inputName, muted),
                 $"{(muted ? "muting" : "unmuting")} input '{inputName}'");
     }
 
     public async Task ToggleInputMute(string inputName)
     {
-        if (await CheckConnection().ConfigureAwait(false))
-            Guarded(() => _obs.ToggleInputMute(inputName), $"toggling mute of input '{inputName}'");
+        if (await GetConnectionAsync().ConfigureAwait(false) is { } obs)
+            Guarded(() => obs.ToggleInputMute(inputName), $"toggling mute of input '{inputName}'");
     }
 
     public async Task<List<string>> GetInputNames()
     {
-        if (!await CheckConnection().ConfigureAwait(false))
+        if (await GetConnectionAsync().ConfigureAwait(false) is not { } obs)
             return [];
 
         try
         {
-            return _obs.GetInputList().Select(input => input.InputName).ToList();
+            return obs.GetInputList().Select(input => input.InputName).ToList();
         }
         catch (Exception ex)
         {
@@ -471,26 +611,26 @@ public sealed class ObsController : IObsController
 
     public async Task SetSourceVisible(string sourceName, string sceneName, bool visible)
     {
-        if (!await CheckConnection().ConfigureAwait(false))
+        if (await GetConnectionAsync().ConfigureAwait(false) is not { } obs)
             return;
 
         Guarded(() =>
         {
-            string scene = ResolveScene(sceneName);
-            _obs.SetSceneItemEnabled(scene, _obs.GetSceneItemId(scene, sourceName, 0), visible);
+            string scene = ResolveScene(obs, sceneName);
+            obs.SetSceneItemEnabled(scene, obs.GetSceneItemId(scene, sourceName, 0), visible);
         }, $"{(visible ? "showing" : "hiding")} source '{sourceName}'");
     }
 
     public async Task ToggleSource(string sourceName, string sceneName)
     {
-        if (!await CheckConnection().ConfigureAwait(false))
+        if (await GetConnectionAsync().ConfigureAwait(false) is not { } obs)
             return;
 
         Guarded(() =>
         {
-            string scene = ResolveScene(sceneName);
-            int itemId = _obs.GetSceneItemId(scene, sourceName, 0);
-            _obs.SetSceneItemEnabled(scene, itemId, !_obs.GetSceneItemEnabled(scene, itemId));
+            string scene = ResolveScene(obs, sceneName);
+            int itemId = obs.GetSceneItemId(scene, sourceName, 0);
+            obs.SetSceneItemEnabled(scene, itemId, !obs.GetSceneItemEnabled(scene, itemId));
         }, $"toggling source '{sourceName}'");
     }
 
@@ -499,19 +639,19 @@ public sealed class ObsController : IObsController
     /// parameter from a menu selection, so the scene stays optional: unless the user pins
     /// a scene name in the command's settings, the command follows the program scene.
     /// </summary>
-    private string ResolveScene(string sceneName) =>
+    private static string ResolveScene(OBSWebsocket obs, string sceneName) =>
         string.IsNullOrWhiteSpace(sceneName) || sceneName == CurrentScenePlaceholder
-            ? _obs.GetCurrentProgramScene()
+            ? obs.GetCurrentProgramScene()
             : sceneName;
 
     public async Task<List<string>> GetSourceNames(string sceneName)
     {
-        if (!await CheckConnection().ConfigureAwait(false))
+        if (await GetConnectionAsync().ConfigureAwait(false) is not { } obs)
             return [];
 
         try
         {
-            return _obs.GetSceneItemList(sceneName).Select(item => item.SourceName).ToList();
+            return obs.GetSceneItemList(sceneName).Select(item => item.SourceName).ToList();
         }
         catch (Exception ex)
         {

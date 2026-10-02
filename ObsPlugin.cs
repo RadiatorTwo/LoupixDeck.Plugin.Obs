@@ -24,8 +24,20 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
         Version = new Version(1, 3, 0),
         SdkVersion = new Version(1, 21, 0),
         Author = "RadiatorTwo",
-        Description = "Control OBS Studio (recording, replay buffer, virtual camera, scenes) via obs-websocket."
+        Description = "Control OBS Studio (recording, replay buffer, virtual camera, scenes) via obs-websocket.",
+        Icon = LoadIcon()
     };
+
+    /// <summary>The plugin icon (icon.png, embedded). Missing data only costs the icon.</summary>
+    private static byte[]? LoadIcon()
+    {
+        using Stream? stream = typeof(ObsPlugin).Assembly.GetManifestResourceStream("LoupixDeck.Plugin.Obs.icon.png");
+        if (stream == null) return null;
+
+        using MemoryStream buffer = new();
+        stream.CopyTo(buffer);
+        return buffer.ToArray();
+    }
 
     public override void Initialize(IPluginHost host)
     {

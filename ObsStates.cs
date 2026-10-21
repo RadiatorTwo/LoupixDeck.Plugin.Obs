@@ -27,6 +27,19 @@ internal static class ObsStates
     public const string Offline = "Offline";
     public const string Live = "Live";
 
+    // Scenes: on program (Active) or in the studio mode preview (Preview).
+    public const string Inactive = "Inactive";
+    public const string Active = "Active";
+    public const string Preview = "Preview";
+
+    // Sources and filters.
+    public const string Hidden = "Hidden";
+    public const string Shown = "Shown";
+
+    // Audio inputs.
+    public const string Unmuted = "Unmuted";
+    public const string Muted = "Muted";
+
     private const string Foreground = "#FFFFFF";
     private const string InactiveBackground = "#2B2F36";
     private const string LiveBackground = "#B3261E";
@@ -39,6 +52,11 @@ internal static class ObsStates
     private const string WebcamGlyph = "\U000F05A0"; // mdi-webcam
     private const string WebcamOffGlyph = "\U000F1737"; // mdi-webcam-off
     private const string StudioModeGlyph = "\U000F0BCC"; // mdi-view-split-vertical
+    private const string SceneGlyph = "\U000F0FCF"; // mdi-movie-open-outline
+    private const string EyeGlyph = "\U000F0208"; // mdi-eye
+    private const string EyeOffGlyph = "\U000F0209"; // mdi-eye-off
+    private const string VolumeGlyph = "\U000F057E"; // mdi-volume-high
+    private const string VolumeOffGlyph = "\U000F075F"; // mdi-volume-off
 
     /// <summary>
     /// Recording. A paused recording is still a recording, and pausing has its own command, so
@@ -73,6 +91,39 @@ internal static class ObsStates
     [
         State(Off, "Disabled", StudioModeGlyph, "Studio mode", InactiveBackground),
         State(On, "Enabled", StudioModeGlyph, "Studio mode", EnabledBackground)
+    ];
+
+    // The captions below name the button's own scene, source, filter or input: the host replaces
+    // the {ParameterName} placeholder with the button's parameter when it creates the layers.
+
+    public static IReadOnlyList<ButtonStateDescriptor> Scene { get; } =
+    [
+        State(Inactive, "Not on program", SceneGlyph, "{SceneName}", InactiveBackground),
+        State(Active, "On program", SceneGlyph, "{SceneName}", LiveBackground)
+    ];
+
+    public static IReadOnlyList<ButtonStateDescriptor> PreviewScene { get; } =
+    [
+        State(Inactive, "Not in the preview", SceneGlyph, "{SceneName}", InactiveBackground),
+        State(Preview, "In the studio mode preview", SceneGlyph, "{SceneName}", EnabledBackground)
+    ];
+
+    public static IReadOnlyList<ButtonStateDescriptor> Source { get; } =
+    [
+        State(Hidden, "Hidden", EyeOffGlyph, "{SourceName}", InactiveBackground),
+        State(Shown, "Shown", EyeGlyph, "{SourceName}", EnabledBackground)
+    ];
+
+    public static IReadOnlyList<ButtonStateDescriptor> Filter { get; } =
+    [
+        State(Hidden, "Disabled", EyeOffGlyph, "{FilterName}", InactiveBackground),
+        State(Shown, "Enabled", EyeGlyph, "{FilterName}", EnabledBackground)
+    ];
+
+    public static IReadOnlyList<ButtonStateDescriptor> InputMute { get; } =
+    [
+        State(Unmuted, "Not muted", VolumeGlyph, "{InputName}", InactiveBackground),
+        State(Muted, "Muted", VolumeOffGlyph, "{InputName}", LiveBackground)
     ];
 
     /// <summary>

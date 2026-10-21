@@ -16,8 +16,13 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
     private readonly ObsController _controller = new();
     private IPluginHost? _host;
     private readonly ObsStateReporter _stateReporter;
+    private readonly ObsLiveState _liveState;
 
-    public ObsPlugin() => _stateReporter = new ObsStateReporter(_controller);
+    public ObsPlugin()
+    {
+        _stateReporter = new ObsStateReporter(_controller);
+        _liveState = new ObsLiveState(_controller);
+    }
 
     public override PluginMetadata Metadata { get; } = new()
     {
@@ -46,12 +51,14 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
         _host = host;
         ApplySettings();
         _stateReporter.Attach(host);
+        _liveState.Attach(host);
         _controller.Connect();
     }
 
     public override void Shutdown()
     {
         _stateReporter.Detach();
+        _liveState.Detach();
         _controller.Disconnect();
     }
 
@@ -83,20 +90,20 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
 
             // Studio mode
             new ObsToggleStudioModeCommand(_controller, _stateReporter),
-            new ObsSetPreviewSceneCommand(_controller),
+            new ObsSetPreviewSceneCommand(_controller, _liveState),
             new ObsTriggerTransitionCommand(_controller),
 
             // Scenes, audio and sources — surfaced through the dynamic submenus
-            new ObsSetSceneCommand(_controller),
+            new ObsSetSceneCommand(_controller, _liveState),
             new ObsMuteInputCommand(_controller),
             new ObsUnmuteInputCommand(_controller),
-            new ObsToggleInputMuteCommand(_controller),
+            new ObsToggleInputMuteCommand(_controller, _liveState),
             new ObsShowSourceCommand(_controller),
             new ObsHideSourceCommand(_controller),
-            new ObsToggleSourceCommand(_controller),
+            new ObsToggleSourceCommand(_controller, _liveState),
             new ObsShowFilterCommand(_controller),
             new ObsHideFilterCommand(_controller),
-            new ObsToggleFilterCommand(_controller)
+            new ObsToggleFilterCommand(_controller, _liveState)
         ];
     }
 

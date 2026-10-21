@@ -16,14 +16,16 @@ The discrete actions behind them:
 
 Studio mode: `System.ObsTriggerTransition`, `System.ObsSetPreviewScene`.
 
-Scene, audio and source control, surfaced through the dynamic "Scenes",
-"Preview Scenes", "Audio" and "Sources" submenus:
+Scene, audio, source and filter control, surfaced through the dynamic "Scenes",
+"Preview Scenes", "Audio", "Sources" and "Filters" submenus:
 `System.ObsSetScene`, `System.ObsMuteInput`, `System.ObsUnmuteInput`,
 `System.ObsToggleInputMute`, `System.ObsShowSource`, `System.ObsHideSource`,
-`System.ObsToggleSource`.
+`System.ObsToggleSource`, `System.ObsShowFilter`, `System.ObsHideFilter`,
+`System.ObsToggleFilter`.
 
 The source commands take the source name plus an optional scene name; left at
-its `<current>` default the command follows the current program scene.
+its `<current>` default the command follows the current program scene. The filter
+commands take the scene or source that carries the filter, and the filter name.
 
 ## Button states
 
@@ -31,9 +33,13 @@ The five toggle commands declare their own states, so assigning one to a button
 creates them: `Idle` / `Recording` for recording, `Off` / `On` for the
 replay buffer, virtual camera and studio mode, `Offline` / `Live` for streaming.
 The button then follows what OBS is actually doing, including changes made in OBS
-itself, and each state draws its own indicator. State management is locked while
-such a command is assigned — the layers inside every state stay yours, so put your
-own text, icon or background around the indicator.
+itself. Each state starts with its own icon, caption and background colour; these
+are ordinary layers, so restyle or replace them as you like. State management is
+locked while such a command is assigned — the layers inside every state stay yours.
+
+The starting layers are only created when the command is put on a button. Buttons
+assigned with an older plugin version keep their states but no longer get a drawn
+indicator; assign the command again to get the new layers.
 
 A paused recording counts as recording — pausing has its own command, so the toggle
 only says whether OBS is recording at all.
@@ -43,10 +49,10 @@ commands, and which state a button should show would be a guess. A button whose
 states you built by hand keeps working as before — the plugin sets a state whose
 name matches, and leaves everything else alone.
 
-Scene, audio and source buttons carry no state either: every one of them shares a
+Scene, audio, source and filter buttons carry no state either: every one of them shares a
 single command name, which the host's state API cannot tell apart.
 
-Requires LoupixDeck with SDK 1.21.0 or newer.
+Requires LoupixDeck with SDK 1.30.0 or newer.
 
 ## Settings
 

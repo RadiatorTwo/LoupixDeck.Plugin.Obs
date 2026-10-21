@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using LoupixDeck.PluginSdk;
 
 namespace LoupixDeck.Plugin.Obs;
@@ -10,8 +11,10 @@ namespace LoupixDeck.Plugin.Obs;
 /// The commands declare their states (see <see cref="ObsStates"/>), so the host creates them
 /// and a state can be addressed by its name directly. A button whose states were built by hand
 /// before that (or edited afterwards) simply does not match and stays untouched.
+/// The last reported state of every command is kept, so a button that missed the push can be
+/// put right later (see <see cref="ObsStatefulCommand"/>).
 /// </remarks>
-internal sealed class ObsStateReporter : IDisposable
+internal sealed class ObsStateReporter
 {
     /// <summary>Commands whose button reflects the recording state.</summary>
     private static readonly string[] RecordCommands =
@@ -43,13 +46,21 @@ internal sealed class ObsStateReporter : IDisposable
 
     private static readonly string[] StudioModeCommands = ["System.ObsToggleStudioMode"];
 
-    private readonly IPluginHost _host;
     private readonly IObsController _obs;
+    private readonly ConcurrentDictionary<string, string> _states = new(StringComparer.Ordinal);
+    private IPluginHost? _host;
 
-    public ObsStateReporter(IPluginHost host, IObsController obs)
+    /// <remarks>
+    /// Created before the plugin is initialized, because the commands hold it; it only listens
+    /// to OBS between <see cref="Attach"/> and <see cref="Detach"/>.
+    /// </remarks>
+    public ObsStateReporter(IObsController obs) => _obs = obs;
+
+    /// <summary>Starts pushing OBS state changes to the host's buttons.</summary>
+    public void Attach(IPluginHost host)
     {
+        Detach();
         _host = host;
-        _obs = obs;
 
         _obs.RecordStateChanged += OnRecordStateChanged;
         _obs.ReplayBufferActiveChanged += OnReplayBufferActiveChanged;
@@ -58,14 +69,19 @@ internal sealed class ObsStateReporter : IDisposable
         _obs.StudioModeChanged += OnStudioModeChanged;
     }
 
-    public void Dispose()
+    public void Detach()
     {
+        _host = null;
+        _states.Clear();
         _obs.RecordStateChanged -= OnRecordStateChanged;
         _obs.ReplayBufferActiveChanged -= OnReplayBufferActiveChanged;
         _obs.VirtualCamActiveChanged -= OnVirtualCamActiveChanged;
         _obs.StreamActiveChanged -= OnStreamActiveChanged;
         _obs.StudioModeChanged -= OnStudioModeChanged;
     }
+
+    /// <summary>The state last reported for <paramref name="commandName"/>, or null before OBS reported one.</summary>
+    public string? GetState(string commandName) => _states.GetValueOrDefault(commandName);
 
     private void OnRecordStateChanged(ObsRecordState state)
     {
@@ -100,15 +116,20 @@ internal sealed class ObsStateReporter : IDisposable
     {
         foreach (string commandName in commandNames)
         {
+            _states[commandName] = stateName;
+
+            if (_host is not { } host)
+                continue;
+
             try
             {
-                if (!_host.SetActiveButtonState(commandName, stateName))
+                if (!host.SetActiveButtonState(commandName, stateName))
                     continue; // No button bound to this command, or it already shows the state.
             }
             catch (Exception ex)
             {
                 // The host may not be ready yet, or the button was unbound meanwhile.
-                _host.Logger.Warn($"Could not update button state for {commandName}: {ex.Message}");
+                host.Logger.Warn($"Could not update button state for {commandName}: {ex.Message}");
             }
         }
     }

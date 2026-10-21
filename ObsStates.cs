@@ -3,13 +3,15 @@ using LoupixDeck.PluginSdk;
 namespace LoupixDeck.Plugin.Obs;
 
 /// <summary>
-/// The button states the OBS commands declare, and how each one looks. Every command of a group
-/// declares the same states — a button is addressed by its command name, so any member of a group
-/// may be the one the user assigned.
+/// The button states the OBS commands declare, and the layers each one starts with. Every command
+/// of a group declares the same state names — a button is addressed by its command name, so any
+/// member of a group may be the one the user assigned.
 /// </summary>
 /// <remarks>
 /// The names are persisted in the button config and used by <see cref="ObsStateReporter"/> to
-/// select the active state, so they must not change once shipped.
+/// select the active state, so they must not change once shipped. The layouts are only the
+/// starting point: the host creates them once when the command is put on a button, and from then
+/// on they are ordinary layers the user can restyle.
 /// </remarks>
 internal static class ObsStates
 {
@@ -25,11 +27,18 @@ internal static class ObsStates
     public const string Offline = "Offline";
     public const string Live = "Live";
 
-    private static readonly PluginColor Inactive = PluginColor.FromRgb(0x60, 0x66, 0x70);
-    private static readonly PluginColor Red = PluginColor.FromRgb(0xE0, 0x3B, 0x3B);
-    private static readonly PluginColor Green = PluginColor.FromRgb(0x36, 0xB3, 0x5E);
-    private static readonly PluginColor Blue = PluginColor.FromRgb(0x2E, 0x8B, 0xE0);
-    private static readonly PluginColor Purple = PluginColor.FromRgb(0x8B, 0x5C, 0xE0);
+    private const string Foreground = "#FFFFFF";
+    private const string InactiveBackground = "#2B2F36";
+    private const string LiveBackground = "#B3261E";
+    private const string EnabledBackground = "#1F6E43";
+
+    private const string RecordGlyph = "\U000F044B"; // mdi-record-rec
+    private const string BroadcastGlyph = "\U000F1720"; // mdi-broadcast
+    private const string BroadcastOffGlyph = "\U000F1721"; // mdi-broadcast-off
+    private const string ReplayGlyph = "\U000F0459"; // mdi-replay
+    private const string WebcamGlyph = "\U000F05A0"; // mdi-webcam
+    private const string WebcamOffGlyph = "\U000F1737"; // mdi-webcam-off
+    private const string StudioModeGlyph = "\U000F0BCC"; // mdi-view-split-vertical
 
     /// <summary>
     /// Recording. A paused recording is still a recording, and pausing has its own command, so
@@ -37,62 +46,61 @@ internal static class ObsStates
     /// </summary>
     public static IReadOnlyList<ButtonStateDescriptor> Record { get; } =
     [
-        new() { Name = Idle, Description = "Not recording" },
-        new() { Name = Recording, Description = "Recording" }
-    ];
-
-    /// <summary>A plain on/off output: replay buffer, virtual camera, studio mode.</summary>
-    public static IReadOnlyList<ButtonStateDescriptor> Toggle { get; } =
-    [
-        new() { Name = Off, Description = "Not running" },
-        new() { Name = On, Description = "Running" }
+        State(Idle, "Not recording", RecordGlyph, "Record", InactiveBackground),
+        State(Recording, "Recording", RecordGlyph, "Recording", LiveBackground)
     ];
 
     /// <summary>Streaming.</summary>
     public static IReadOnlyList<ButtonStateDescriptor> Stream { get; } =
     [
-        new() { Name = Offline, Description = "Not streaming" },
-        new() { Name = Live, Description = "Streaming" }
+        State(Offline, "Not streaming", BroadcastOffGlyph, "Go live", InactiveBackground),
+        State(Live, "Streaming", BroadcastGlyph, "Live", LiveBackground)
     ];
 
-    public static IReadOnlyDictionary<string, ObsStateVisual> RecordVisuals { get; } =
-        new Dictionary<string, ObsStateVisual>(StringComparer.OrdinalIgnoreCase)
-        {
-            [Idle] = new("REC", Inactive, false),
-            [Recording] = new("REC", Red, true)
-        };
+    public static IReadOnlyList<ButtonStateDescriptor> Replay { get; } =
+    [
+        State(Off, "Not running", ReplayGlyph, "Replay", InactiveBackground),
+        State(On, "Running", ReplayGlyph, "Replay", EnabledBackground)
+    ];
 
-    public static IReadOnlyDictionary<string, ObsStateVisual> ReplayVisuals { get; } =
-        new Dictionary<string, ObsStateVisual>(StringComparer.OrdinalIgnoreCase)
-        {
-            [Off] = new("REPLAY", Inactive, false),
-            [On] = new("REPLAY", Blue, true)
-        };
+    public static IReadOnlyList<ButtonStateDescriptor> VirtualCam { get; } =
+    [
+        State(Off, "Not running", WebcamOffGlyph, "Virtual cam", InactiveBackground),
+        State(On, "Running", WebcamGlyph, "Virtual cam", EnabledBackground)
+    ];
 
-    public static IReadOnlyDictionary<string, ObsStateVisual> VirtualCamVisuals { get; } =
-        new Dictionary<string, ObsStateVisual>(StringComparer.OrdinalIgnoreCase)
-        {
-            [Off] = new("CAM", Inactive, false),
-            [On] = new("CAM", Green, true)
-        };
+    public static IReadOnlyList<ButtonStateDescriptor> StudioMode { get; } =
+    [
+        State(Off, "Disabled", StudioModeGlyph, "Studio mode", InactiveBackground),
+        State(On, "Enabled", StudioModeGlyph, "Studio mode", EnabledBackground)
+    ];
 
-    public static IReadOnlyDictionary<string, ObsStateVisual> StreamVisuals { get; } =
-        new Dictionary<string, ObsStateVisual>(StringComparer.OrdinalIgnoreCase)
+    /// <summary>
+    /// One state with an icon over a caption on a coloured background — the host's standard
+    /// icon-and-caption geometry, so the key looks like any other until the user restyles it.
+    /// </summary>
+    private static ButtonStateDescriptor State(string name, string description, string glyph, string caption,
+        string background) => new()
+    {
+        Name = name,
+        Description = description,
+        Layout = new ButtonLayoutDescriptor
         {
-            [Offline] = new("STREAM", Inactive, false),
-            [Live] = new("LIVE", Red, true)
-        };
-
-    public static IReadOnlyDictionary<string, ObsStateVisual> StudioModeVisuals { get; } =
-        new Dictionary<string, ObsStateVisual>(StringComparer.OrdinalIgnoreCase)
-        {
-            [Off] = new("STUDIO", Inactive, false),
-            [On] = new("STUDIO", Purple, true)
-        };
+            Mode = ButtonLayoutMode.Custom,
+            BackgroundColor = background,
+            Layers =
+            [
+                new ButtonLayerDescriptor
+                {
+                    Kind = ButtonLayerKind.Symbol, Name = "Icon", Glyph = glyph,
+                    IconScale = 46 / 90.0, OffsetY = -8, Color = Foreground
+                },
+                new ButtonLayerDescriptor
+                {
+                    Kind = ButtonLayerKind.Text, Name = "Caption", Text = caption, TextSize = 11,
+                    OffsetY = 27, BoxWidth = 88, BoxHeight = 22, Color = Foreground
+                }
+            ]
+        }
+    };
 }
-
-/// <summary>How one state is drawn: a label, an accent color and whether the dot is filled.</summary>
-/// <param name="Label">Short caption under the indicator.</param>
-/// <param name="Accent">Indicator and caption color.</param>
-/// <param name="Active">True draws a filled indicator, false an outlined one.</param>
-internal readonly record struct ObsStateVisual(string Label, PluginColor Accent, bool Active);

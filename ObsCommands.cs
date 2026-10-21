@@ -7,7 +7,8 @@ namespace LoupixDeck.Plugin.Obs;
 /// built-in commands so existing button assignments in <c>config.json</c>
 /// keep working.
 /// </summary>
-internal sealed class ObsToggleRecordCommand(IObsController obs) : ObsStatefulCommand
+internal sealed class ObsToggleRecordCommand(IObsController obs, ObsStateReporter states)
+    : ObsStatefulCommand(states)
 {
     public override CommandDescriptor Descriptor { get; } = new()
     {
@@ -16,10 +17,10 @@ internal sealed class ObsToggleRecordCommand(IObsController obs) : ObsStatefulCo
         Group = "OBS",
         Icon = "󰑊", // mdi-record
         Description = "Start or stop recording, and show whether OBS is recording",
-        States = ObsStates.Record
+        States = ObsStates.Record,
+        // Every state brings its own layers.
+        ButtonLayout = new ButtonLayoutDescriptor { Mode = ButtonLayoutMode.None }
     };
-
-    protected override IReadOnlyDictionary<string, ObsStateVisual> Visuals => ObsStates.RecordVisuals;
 
     public override Task Execute(CommandContext ctx) => obs.ToggleRecording();
 }
@@ -72,7 +73,8 @@ internal sealed class ObsPauseRecordCommand(IObsController obs) : IPluginCommand
     public Task Execute(CommandContext ctx) => obs.PauseRecording();
 }
 
-internal sealed class ObsVirtualCamCommand(IObsController obs) : ObsStatefulCommand
+internal sealed class ObsVirtualCamCommand(IObsController obs, ObsStateReporter states)
+    : ObsStatefulCommand(states)
 {
     public override CommandDescriptor Descriptor { get; } = new()
     {
@@ -81,15 +83,16 @@ internal sealed class ObsVirtualCamCommand(IObsController obs) : ObsStatefulComm
         Group = "OBS",
         Icon = "\U000F05A0", // mdi-webcam
         Description = "Toggle the virtual camera",
-        States = ObsStates.Toggle
+        States = ObsStates.VirtualCam,
+        // Every state brings its own layers.
+        ButtonLayout = new ButtonLayoutDescriptor { Mode = ButtonLayoutMode.None }
     };
-
-    protected override IReadOnlyDictionary<string, ObsStateVisual> Visuals => ObsStates.VirtualCamVisuals;
 
     public override Task Execute(CommandContext ctx) => obs.ToggleVirtualCamera();
 }
 
-internal sealed class ObsToggleReplayCommand(IObsController obs) : ObsStatefulCommand
+internal sealed class ObsToggleReplayCommand(IObsController obs, ObsStateReporter states)
+    : ObsStatefulCommand(states)
 {
     public override CommandDescriptor Descriptor { get; } = new()
     {
@@ -98,10 +101,10 @@ internal sealed class ObsToggleReplayCommand(IObsController obs) : ObsStatefulCo
         Group = "OBS",
         Icon = "󰓡", // mdi-record-rec
         Description = "Start or stop the replay buffer, and show whether it is running",
-        States = ObsStates.Toggle
+        States = ObsStates.Replay,
+        // Every state brings its own layers.
+        ButtonLayout = new ButtonLayoutDescriptor { Mode = ButtonLayoutMode.None }
     };
-
-    protected override IReadOnlyDictionary<string, ObsStateVisual> Visuals => ObsStates.ReplayVisuals;
 
     public override Task Execute(CommandContext ctx) => obs.ToggleReplayBuffer();
 }
@@ -183,7 +186,8 @@ internal sealed class ObsSetSceneCommand(IObsController obs) : IPluginCommand
     }
 }
 
-internal sealed class ObsToggleStreamCommand(IObsController obs) : ObsStatefulCommand
+internal sealed class ObsToggleStreamCommand(IObsController obs, ObsStateReporter states)
+    : ObsStatefulCommand(states)
 {
     public override CommandDescriptor Descriptor { get; } = new()
     {
@@ -192,10 +196,10 @@ internal sealed class ObsToggleStreamCommand(IObsController obs) : ObsStatefulCo
         Group = "OBS",
         Icon = "󰜛", // mdi-broadcast
         Description = "Start or stop streaming, and show whether OBS is live",
-        States = ObsStates.Stream
+        States = ObsStates.Stream,
+        // Every state brings its own layers.
+        ButtonLayout = new ButtonLayoutDescriptor { Mode = ButtonLayoutMode.None }
     };
-
-    protected override IReadOnlyDictionary<string, ObsStateVisual> Visuals => ObsStates.StreamVisuals;
 
     public override Task Execute(CommandContext ctx) => obs.ToggleStream();
 }
@@ -232,7 +236,8 @@ internal sealed class ObsStopStreamCommand(IObsController obs) : IPluginCommand
     public Task Execute(CommandContext ctx) => obs.StopStream();
 }
 
-internal sealed class ObsToggleStudioModeCommand(IObsController obs) : ObsStatefulCommand
+internal sealed class ObsToggleStudioModeCommand(IObsController obs, ObsStateReporter states)
+    : ObsStatefulCommand(states)
 {
     public override CommandDescriptor Descriptor { get; } = new()
     {
@@ -241,10 +246,10 @@ internal sealed class ObsToggleStudioModeCommand(IObsController obs) : ObsStatef
         Group = "OBS",
         Icon = "\U000F0493", // mdi-view-split-vertical
         Description = "Enable or disable studio mode",
-        States = ObsStates.Toggle
+        States = ObsStates.StudioMode,
+        // Every state brings its own layers.
+        ButtonLayout = new ButtonLayoutDescriptor { Mode = ButtonLayoutMode.None }
     };
-
-    protected override IReadOnlyDictionary<string, ObsStateVisual> Visuals => ObsStates.StudioModeVisuals;
 
     public override Task Execute(CommandContext ctx) => obs.ToggleStudioMode();
 }
@@ -434,4 +439,77 @@ internal sealed class ObsToggleSourceCommand(IObsController obs) : ObsSourceComm
 
     protected override Task Execute(string sourceName, string sceneName) =>
         Obs.ToggleSource(sourceName, sceneName);
+}
+
+/// <summary>
+/// Base for the per-filter commands. They take the source (or scene) carrying the filter and the
+/// filter name, and are surfaced through the dynamic "Filters" submenu.
+/// </summary>
+internal abstract class ObsFilterCommandBase(IObsController obs) : IPluginCommand
+{
+    protected IObsController Obs { get; } = obs;
+
+    public abstract CommandDescriptor Descriptor { get; }
+
+    public ButtonTargets SupportedTargets => ButtonTargets.All;
+
+    public Task Execute(CommandContext ctx)
+    {
+        if (ctx.Parameters.Length != 2)
+        {
+            Console.WriteLine($"{Descriptor.CommandName}: invalid parameter count");
+            return Task.CompletedTask;
+        }
+
+        return Execute(ctx.Parameters[0], ctx.Parameters[1]);
+    }
+
+    protected abstract Task Execute(string sourceName, string filterName);
+
+    protected static CommandDescriptor Describe(string commandName, string displayName, string icon,
+        string description) => new()
+    {
+        CommandName = commandName,
+        DisplayName = displayName,
+        Group = "OBS",
+        Icon = icon,
+        Description = description,
+        ParameterTemplate = "({SourceName},{FilterName})",
+        Parameters =
+        [
+            new CommandParameter("SourceName", typeof(string)),
+            new CommandParameter("FilterName", typeof(string))
+        ],
+        HiddenFromMenu = true
+    };
+}
+
+internal sealed class ObsShowFilterCommand(IObsController obs) : ObsFilterCommandBase(obs)
+{
+    public override CommandDescriptor Descriptor { get; } = Describe(
+        "System.ObsShowFilter", "Show Filter", "\U000F0208", // mdi-eye
+        "Enable a filter on a source or scene");
+
+    protected override Task Execute(string sourceName, string filterName) =>
+        Obs.SetFilterEnabled(sourceName, filterName, true);
+}
+
+internal sealed class ObsHideFilterCommand(IObsController obs) : ObsFilterCommandBase(obs)
+{
+    public override CommandDescriptor Descriptor { get; } = Describe(
+        "System.ObsHideFilter", "Hide Filter", "\U000F0209", // mdi-eye-off
+        "Disable a filter on a source or scene");
+
+    protected override Task Execute(string sourceName, string filterName) =>
+        Obs.SetFilterEnabled(sourceName, filterName, false);
+}
+
+internal sealed class ObsToggleFilterCommand(IObsController obs) : ObsFilterCommandBase(obs)
+{
+    public override CommandDescriptor Descriptor { get; } = Describe(
+        "System.ObsToggleFilter", "Toggle Filter", "\U000F0D04", // mdi-eye-check
+        "Enable or disable a filter on a source or scene");
+
+    protected override Task Execute(string sourceName, string filterName) =>
+        Obs.ToggleFilter(sourceName, filterName);
 }

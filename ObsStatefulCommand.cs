@@ -1,53 +1,49 @@
+using System.Collections.Concurrent;
 using LoupixDeck.PluginSdk;
 
 namespace LoupixDeck.Plugin.Obs;
 
 /// <summary>
-/// Base for the OBS commands that declare their own button states and draw them: the host creates
-/// the declared states when the command is assigned, <see cref="ObsStateReporter"/> selects the
-/// active one from the live OBS state, and this class renders it.
+/// Base for the OBS commands that declare their own button states: the host creates the declared
+/// states with their layers when the command is assigned, and <see cref="ObsStateReporter"/>
+/// selects the active one from the live OBS state. Nothing is drawn by the plugin.
 /// </summary>
 /// <remarks>
-/// The picture only changes when OBS changes, which arrives as a push
-/// (<see cref="IPluginHost.SetActiveButtonState"/> plus the host's own re-render on a state
-/// switch), so the poll interval is only a slow safety net.
+/// State changes arrive as a push from OBS. The value poll only puts a button right that missed
+/// the push — one assigned or loaded after OBS last changed — once, when it first sees the
+/// button; it reports no value.
 /// </remarks>
-internal abstract class ObsStatefulCommand : IDisplayImageCommand
+internal abstract class ObsStatefulCommand(ObsStateReporter states) : IValueDisplayCommand
 {
     public abstract CommandDescriptor Descriptor { get; }
 
     public ButtonTargets SupportedTargets => ButtonTargets.All;
 
-    public TimeSpan UpdateInterval => TimeSpan.FromSeconds(5);
+    public TimeSpan UpdateInterval => TimeSpan.FromSeconds(2);
 
     public abstract Task Execute(CommandContext ctx);
 
-    /// <summary>How each declared state is drawn, keyed by state name.</summary>
-    protected abstract IReadOnlyDictionary<string, ObsStateVisual> Visuals { get; }
+    /// <summary>Buttons already put right once, by <see cref="CommandContext.ButtonKey"/>.</summary>
+    private readonly ConcurrentDictionary<string, byte> _synced = new(StringComparer.Ordinal);
 
-    public bool RenderImage(CommandContext ctx, IRenderCanvas canvas)
+    public AdjustmentValue? GetValue(CommandContext ctx)
     {
-        // No state (a button whose states the user manages himself) → leave his content alone.
-        if (ctx.StateName == null || !Visuals.TryGetValue(ctx.StateName, out ObsStateVisual visual))
-            return false;
+        string? target = states.GetState(Descriptor.CommandName);
 
-        int size = Math.Min(canvas.Width, canvas.Height);
-        int radius = Math.Max(6, size / 6);
-        int centerX = canvas.Width / 2;
-        int centerY = (canvas.Height / 2) - (size / 10);
+        // No state on this button (its states are the user's own), or OBS has not reported yet:
+        // leave it alone.
+        if (target == null || ctx.StateName == null)
+            return null;
 
-        // Nothing is cleared: the canvas starts fully transparent and the indicator is composited
-        // over whatever the state already shows — the button's background color and the user's own
-        // layers stay visible.
-        if (visual.Active)
-            canvas.FillCircle(centerX, centerY, radius, visual.Accent);
-        else
-            canvas.DrawCircle(centerX, centerY, radius, Math.Max(2, radius / 4), visual.Accent);
+        // Only once per button: the button editor switches the active state to show the state
+        // being edited, and correcting it on every poll would snap the editor back to the live
+        // state. Later changes arrive as pushes from OBS anyway.
+        if (ctx.ButtonKey != null && !_synced.TryAdd(ctx.ButtonKey, 0))
+            return null;
 
-        int labelHeight = Math.Max(14, size / 4);
-        canvas.DrawText(visual.Label, 0, canvas.Height - labelHeight - (size / 12), canvas.Width, labelHeight,
-            visual.Accent, size / 6f, bold: true);
+        if (!string.Equals(ctx.StateName, target, StringComparison.OrdinalIgnoreCase))
+            ctx.Host.SetActiveButtonState(Descriptor.CommandName, target);
 
-        return true;
+        return null;
     }
 }

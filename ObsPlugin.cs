@@ -15,16 +15,18 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
 
     private readonly ObsController _controller = new();
     private IPluginHost? _host;
-    private ObsStateReporter? _stateReporter;
+    private readonly ObsStateReporter _stateReporter;
+
+    public ObsPlugin() => _stateReporter = new ObsStateReporter(_controller);
 
     public override PluginMetadata Metadata { get; } = new()
     {
         Id = "obs",
         Name = "OBS Studio",
-        Version = new Version(1, 3, 0),
-        SdkVersion = new Version(1, 21, 0),
+        Version = new Version(1, 4, 0),
+        SdkVersion = new Version(1, 30, 0),
         Author = "RadiatorTwo",
-        Description = "Control OBS Studio (recording, replay buffer, virtual camera, scenes) via obs-websocket.",
+        Description = "Control OBS Studio (recording, streaming, replay buffer, virtual camera, scenes, sources, filters) via obs-websocket.",
         Icon = LoadIcon()
     };
 
@@ -43,14 +45,13 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
     {
         _host = host;
         ApplySettings();
-        _stateReporter = new ObsStateReporter(host, _controller);
+        _stateReporter.Attach(host);
         _controller.Connect();
     }
 
     public override void Shutdown()
     {
-        _stateReporter?.Dispose();
-        _stateReporter = null;
+        _stateReporter.Detach();
         _controller.Disconnect();
     }
 
@@ -61,27 +62,27 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
         return
         [
             // Recording
-            new ObsToggleRecordCommand(_controller),
+            new ObsToggleRecordCommand(_controller, _stateReporter),
             new ObsStartRecordCommand(_controller),
             new ObsStopRecordCommand(_controller),
             new ObsPauseRecordCommand(_controller),
 
             // Replay buffer
-            new ObsToggleReplayCommand(_controller),
+            new ObsToggleReplayCommand(_controller, _stateReporter),
             new ObsStartReplayCommand(_controller),
             new ObsStopReplayCommand(_controller),
             new ObsSaveReplayCommand(_controller),
 
             // Streaming
-            new ObsToggleStreamCommand(_controller),
+            new ObsToggleStreamCommand(_controller, _stateReporter),
             new ObsStartStreamCommand(_controller),
             new ObsStopStreamCommand(_controller),
 
             // Virtual camera
-            new ObsVirtualCamCommand(_controller),
+            new ObsVirtualCamCommand(_controller, _stateReporter),
 
             // Studio mode
-            new ObsToggleStudioModeCommand(_controller),
+            new ObsToggleStudioModeCommand(_controller, _stateReporter),
             new ObsSetPreviewSceneCommand(_controller),
             new ObsTriggerTransitionCommand(_controller),
 
@@ -92,7 +93,10 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
             new ObsToggleInputMuteCommand(_controller),
             new ObsShowSourceCommand(_controller),
             new ObsHideSourceCommand(_controller),
-            new ObsToggleSourceCommand(_controller)
+            new ObsToggleSourceCommand(_controller),
+            new ObsShowFilterCommand(_controller),
+            new ObsHideFilterCommand(_controller),
+            new ObsToggleFilterCommand(_controller)
         ];
     }
 
@@ -141,7 +145,8 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
                     BuildSceneFolder("Scenes", "System.ObsSetScene", scenes),
                     BuildSceneFolder("Preview Scenes", "System.ObsSetPreviewScene", scenes),
                     await BuildAudioFolder(),
-                    await BuildSourcesFolder(scenes)
+                    await BuildSourcesFolder(scenes),
+                    await BuildFiltersFolder(scenes)
                 ]
             }
         ];
@@ -238,6 +243,73 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
         }
 
         return new MenuNode { Name = "Sources", Children = sceneFolders };
+    }
+
+    /// <summary>
+    /// Filters sit on scenes and on sources, so the folder has one branch for each, holding a
+    /// folder per scene or source that has filters and, inside it, show / hide / toggle per filter.
+    /// </summary>
+    private async Task<MenuNode> BuildFiltersFolder(List<SceneBasicInfo> scenes)
+    {
+        List<string> sources;
+        try
+        {
+            sources = await _controller.GetInputNames();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error getting OBS inputs for the filters menu: {ex.Message}");
+            sources = [];
+        }
+
+        return new MenuNode
+        {
+            Name = "Filters",
+            Children =
+            [
+                new MenuNode { Name = "Scenes", Children = await BuildFilterOwners(scenes.Select(scene => scene.Name)) },
+                new MenuNode { Name = "Sources", Children = await BuildFilterOwners(sources) }
+            ]
+        };
+    }
+
+    /// <summary>One folder per scene or source that carries filters; those without any are left out.</summary>
+    private async Task<List<MenuNode>> BuildFilterOwners(IEnumerable<string> owners)
+    {
+        List<MenuNode> folders = [];
+
+        foreach (string owner in owners)
+        {
+            List<string> filters = await _controller.GetFilterNames(owner);
+            if (filters.Count == 0)
+                continue;
+
+            List<MenuNode> filterFolders = filters
+                .Select(filter =>
+                {
+                    Dictionary<string, string> parameters = new()
+                    {
+                        ["SourceName"] = owner,
+                        ["FilterName"] = filter
+                    };
+
+                    return new MenuNode
+                    {
+                        Name = filter,
+                        Children =
+                        [
+                            new MenuNode { Name = "Show", CommandName = "System.ObsShowFilter", Parameters = parameters },
+                            new MenuNode { Name = "Hide", CommandName = "System.ObsHideFilter", Parameters = parameters },
+                            new MenuNode { Name = "Toggle", CommandName = "System.ObsToggleFilter", Parameters = parameters }
+                        ]
+                    };
+                })
+                .ToList();
+
+            folders.Add(new MenuNode { Name = owner, Children = filterFolders });
+        }
+
+        return folders;
     }
 
     // ───────── IPluginSettingsPage — connection settings ─────────

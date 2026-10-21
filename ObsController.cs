@@ -81,6 +81,15 @@ public interface IObsController
 
     /// <summary>Names of the sources in <paramref name="sceneName"/>, for the dynamic "Sources" submenu.</summary>
     Task<List<string>> GetSourceNames(string sceneName);
+
+    /// <summary>Enables or disables the filter <paramref name="filterName"/> on a source or scene.</summary>
+    Task SetFilterEnabled(string sourceName, string filterName, bool enabled);
+
+    /// <inheritdoc cref="SetFilterEnabled"/>
+    Task ToggleFilter(string sourceName, string filterName);
+
+    /// <summary>Names of the filters on a source or scene, for the dynamic "Filters" submenu.</summary>
+    Task<List<string>> GetFilterNames(string sourceName);
 }
 
 /// <inheritdoc cref="IObsController"/>
@@ -656,6 +665,37 @@ public sealed class ObsController : IObsController
         catch (Exception ex)
         {
             Console.WriteLine($"Error getting sources of OBS scene '{sceneName}': {ex.Message}");
+            return [];
+        }
+    }
+
+    public async Task SetFilterEnabled(string sourceName, string filterName, bool enabled)
+    {
+        if (await GetConnectionAsync().ConfigureAwait(false) is { } obs)
+            Guarded(() => obs.SetSourceFilterEnabled(sourceName, filterName, enabled),
+                $"{(enabled ? "enabling" : "disabling")} filter '{filterName}' on '{sourceName}'");
+    }
+
+    public async Task ToggleFilter(string sourceName, string filterName)
+    {
+        if (await GetConnectionAsync().ConfigureAwait(false) is { } obs)
+            Guarded(() => obs.SetSourceFilterEnabled(sourceName, filterName,
+                !obs.GetSourceFilter(sourceName, filterName).IsEnabled),
+                $"toggling filter '{filterName}' on '{sourceName}'");
+    }
+
+    public async Task<List<string>> GetFilterNames(string sourceName)
+    {
+        if (await GetConnectionAsync().ConfigureAwait(false) is not { } obs)
+            return [];
+
+        try
+        {
+            return obs.GetSourceFilterList(sourceName).Select(filter => filter.Name).ToList();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error getting filters of OBS source '{sourceName}': {ex.Message}");
             return [];
         }
     }

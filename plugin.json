@@ -1,8 +1,8 @@
 {
   "id": "obs",
   "name": "OBS Studio",
-  "version": "1.4.0",
-  "sdkVersion": "1.30.0",
+  "version": "1.5.0",
+  "sdkVersion": "1.34.0",
   "entryAssembly": "LoupixDeck.Plugin.Obs.dll",
   "platform": "All"
 }

@@ -49,10 +49,24 @@ commands, and which state a button should show would be a guess. A button whose
 states you built by hand keeps working as before — the plugin sets a state whose
 name matches, and leaves everything else alone.
 
-Scene, audio, source and filter buttons carry no state either: every one of them shares a
-single command name, which the host's state API cannot tell apart.
+Scene, source, filter and audio buttons show their own state, per button:
 
-Requires LoupixDeck with SDK 1.30.0 or newer.
+| Command | States |
+| --- | --- |
+| `System.ObsSetScene` | `Inactive` / `Active` (on program) |
+| `System.ObsSetPreviewScene` | `Inactive` / `Preview` (in the studio mode preview) |
+| `System.ObsToggleSource` | `Hidden` / `Shown` |
+| `System.ObsToggleFilter` | `Hidden` / `Shown` (disabled / enabled) |
+| `System.ObsToggleInputMute` | `Unmuted` / `Muted` |
+
+Their captions start as the button's scene, source, filter or input name. A source
+button without a pinned scene follows the program scene. The show / hide and mute /
+unmute actions carry no states, like start and stop.
+
+Nothing is polled: OBS reports every change as an event, and LoupixDeck asks the
+plugin for a button's state only when the button is assigned or its editor closes.
+
+Requires LoupixDeck with SDK 1.34.0 or newer.
 
 ## Settings
 

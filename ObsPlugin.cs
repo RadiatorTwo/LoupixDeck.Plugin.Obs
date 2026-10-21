@@ -15,7 +15,9 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
 
     private readonly ObsController _controller = new();
     private IPluginHost? _host;
-    private ObsStateReporter? _stateReporter;
+    private readonly ObsStateReporter _stateReporter;
+
+    public ObsPlugin() => _stateReporter = new ObsStateReporter(_controller);
 
     public override PluginMetadata Metadata { get; } = new()
     {
@@ -43,14 +45,13 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
     {
         _host = host;
         ApplySettings();
-        _stateReporter = new ObsStateReporter(host, _controller);
+        _stateReporter.Attach(host);
         _controller.Connect();
     }
 
     public override void Shutdown()
     {
-        _stateReporter?.Dispose();
-        _stateReporter = null;
+        _stateReporter.Detach();
         _controller.Disconnect();
     }
 
@@ -61,27 +62,27 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
         return
         [
             // Recording
-            new ObsToggleRecordCommand(_controller),
+            new ObsToggleRecordCommand(_controller, _stateReporter),
             new ObsStartRecordCommand(_controller),
             new ObsStopRecordCommand(_controller),
             new ObsPauseRecordCommand(_controller),
 
             // Replay buffer
-            new ObsToggleReplayCommand(_controller),
+            new ObsToggleReplayCommand(_controller, _stateReporter),
             new ObsStartReplayCommand(_controller),
             new ObsStopReplayCommand(_controller),
             new ObsSaveReplayCommand(_controller),
 
             // Streaming
-            new ObsToggleStreamCommand(_controller),
+            new ObsToggleStreamCommand(_controller, _stateReporter),
             new ObsStartStreamCommand(_controller),
             new ObsStopStreamCommand(_controller),
 
             // Virtual camera
-            new ObsVirtualCamCommand(_controller),
+            new ObsVirtualCamCommand(_controller, _stateReporter),
 
             // Studio mode
-            new ObsToggleStudioModeCommand(_controller),
+            new ObsToggleStudioModeCommand(_controller, _stateReporter),
             new ObsSetPreviewSceneCommand(_controller),
             new ObsTriggerTransitionCommand(_controller),
 

@@ -157,22 +157,28 @@ internal sealed class ObsSaveReplayCommand(IObsController obs) : IPluginCommand
     public Task Execute(CommandContext ctx) => obs.SaveReplayBuffer();
 }
 
-internal sealed class ObsSetSceneCommand(IObsController obs) : IPluginCommand
+internal sealed class ObsSetSceneCommand(IObsController obs, ObsLiveState live) : IButtonStateCommand
 {
     public CommandDescriptor Descriptor { get; } = new()
     {
-        CommandName = "System.ObsSetScene",
+        CommandName = ObsLiveState.SetSceneCommand,
         DisplayName = "Set Scene",
         Group = "OBS",
         Icon = "\U000F0FCF", // mdi-movie-open-outline
-        Description = "Switch to a scene",
+        Description = "Switch to a scene, and show whether it is on program",
         ParameterTemplate = "({SceneName})",
         Parameters = [new CommandParameter("SceneName", typeof(string))],
         // Surfaced per scene through the dynamic "Scenes" submenu.
-        HiddenFromMenu = true
+        HiddenFromMenu = true,
+        States = ObsStates.Scene,
+        // Every state brings its own layers.
+        ButtonLayout = new ButtonLayoutDescriptor { Mode = ButtonLayoutMode.None }
     };
 
     public ButtonTargets SupportedTargets => ButtonTargets.All;
+
+    public string? GetButtonState(CommandContext ctx) =>
+        ctx.Parameters.Length == 1 ? live.GetSceneState(ctx.Parameters[0]) : null;
 
     public Task Execute(CommandContext ctx)
     {
@@ -254,22 +260,28 @@ internal sealed class ObsToggleStudioModeCommand(IObsController obs, ObsStateRep
     public override Task Execute(CommandContext ctx) => obs.ToggleStudioMode();
 }
 
-internal sealed class ObsSetPreviewSceneCommand(IObsController obs) : IPluginCommand
+internal sealed class ObsSetPreviewSceneCommand(IObsController obs, ObsLiveState live) : IButtonStateCommand
 {
     public CommandDescriptor Descriptor { get; } = new()
     {
-        CommandName = "System.ObsSetPreviewScene",
+        CommandName = ObsLiveState.SetPreviewSceneCommand,
         DisplayName = "Set Preview Scene",
         Group = "OBS",
         Icon = "\U000F0FCF", // mdi-movie-open-outline
-        Description = "Switch the studio mode preview to a scene",
+        Description = "Switch the studio mode preview to a scene, and show whether it is in the preview",
         ParameterTemplate = "({SceneName})",
         Parameters = [new CommandParameter("SceneName", typeof(string))],
         // Surfaced per scene through the dynamic "Preview Scenes" submenu.
-        HiddenFromMenu = true
+        HiddenFromMenu = true,
+        States = ObsStates.PreviewScene,
+        // Every state brings its own layers.
+        ButtonLayout = new ButtonLayoutDescriptor { Mode = ButtonLayoutMode.None }
     };
 
     public ButtonTargets SupportedTargets => ButtonTargets.All;
+
+    public string? GetButtonState(CommandContext ctx) =>
+        ctx.Parameters.Length == 1 ? live.GetPreviewSceneState(ctx.Parameters[0]) : null;
 
     public Task Execute(CommandContext ctx)
     {
@@ -325,7 +337,7 @@ internal abstract class ObsInputCommandBase(IObsController obs) : IPluginCommand
     protected abstract Task Execute(string inputName);
 
     protected static CommandDescriptor Describe(string commandName, string displayName, string icon,
-        string description) => new()
+        string description, IReadOnlyList<ButtonStateDescriptor>? states = null) => new()
     {
         CommandName = commandName,
         DisplayName = displayName,
@@ -334,7 +346,10 @@ internal abstract class ObsInputCommandBase(IObsController obs) : IPluginCommand
         Description = description,
         ParameterTemplate = "({InputName})",
         Parameters = [new CommandParameter("InputName", typeof(string))],
-        HiddenFromMenu = true
+        HiddenFromMenu = true,
+        States = states ?? [],
+        // A command with states brings its own layers for every state.
+        ButtonLayout = states == null ? null : new ButtonLayoutDescriptor { Mode = ButtonLayoutMode.None }
     };
 }
 
@@ -354,13 +369,17 @@ internal sealed class ObsUnmuteInputCommand(IObsController obs) : ObsInputComman
     protected override Task Execute(string inputName) => Obs.SetInputMuted(inputName, false);
 }
 
-internal sealed class ObsToggleInputMuteCommand(IObsController obs) : ObsInputCommandBase(obs)
+internal sealed class ObsToggleInputMuteCommand(IObsController obs, ObsLiveState live)
+    : ObsInputCommandBase(obs), IButtonStateCommand
 {
     public override CommandDescriptor Descriptor { get; } = Describe(
-        "System.ObsToggleInputMute", "Toggle Input Mute", "\U000F0580", // mdi-volume-medium
-        "Mute or unmute an audio input");
+        ObsLiveState.ToggleInputMuteCommand, "Toggle Input Mute", "\U000F0580", // mdi-volume-medium
+        "Mute or unmute an audio input, and show whether it is muted", ObsStates.InputMute);
 
     protected override Task Execute(string inputName) => Obs.ToggleInputMute(inputName);
+
+    public string? GetButtonState(CommandContext ctx) =>
+        ctx.Parameters.Length == 1 ? live.GetMuteState(ctx.Parameters[0]) : null;
 }
 
 /// <summary>
@@ -389,7 +408,7 @@ internal abstract class ObsSourceCommandBase(IObsController obs) : IPluginComman
     protected abstract Task Execute(string sourceName, string sceneName);
 
     protected static CommandDescriptor Describe(string commandName, string displayName, string icon,
-        string description) => new()
+        string description, IReadOnlyList<ButtonStateDescriptor>? states = null) => new()
     {
         CommandName = commandName,
         DisplayName = displayName,
@@ -407,7 +426,10 @@ internal abstract class ObsSourceCommandBase(IObsController obs) : IPluginComman
                 DefaultValue = ObsController.CurrentScenePlaceholder
             }
         ],
-        HiddenFromMenu = true
+        HiddenFromMenu = true,
+        States = states ?? [],
+        // A command with states brings its own layers for every state.
+        ButtonLayout = states == null ? null : new ButtonLayoutDescriptor { Mode = ButtonLayoutMode.None }
     };
 }
 
@@ -431,14 +453,24 @@ internal sealed class ObsHideSourceCommand(IObsController obs) : ObsSourceComman
         Obs.SetSourceVisible(sourceName, sceneName, false);
 }
 
-internal sealed class ObsToggleSourceCommand(IObsController obs) : ObsSourceCommandBase(obs)
+internal sealed class ObsToggleSourceCommand(IObsController obs, ObsLiveState live)
+    : ObsSourceCommandBase(obs), IButtonStateCommand
 {
     public override CommandDescriptor Descriptor { get; } = Describe(
-        "System.ObsToggleSource", "Toggle Source", "\U000F0D04", // mdi-eye-check
-        "Show or hide a source (in the current scene unless a scene is set)");
+        ObsLiveState.ToggleSourceCommand, "Toggle Source", "\U000F0D04", // mdi-eye-check
+        "Show or hide a source (in the current scene unless a scene is set), and show whether it is shown",
+        ObsStates.Source);
 
     protected override Task Execute(string sourceName, string sceneName) =>
         Obs.ToggleSource(sourceName, sceneName);
+
+    // The scene is optional: a command string saved without it follows the program scene.
+    public string? GetButtonState(CommandContext ctx) => ctx.Parameters.Length switch
+    {
+        1 => live.GetSourceState(ctx.Parameters[0], null),
+        2 => live.GetSourceState(ctx.Parameters[0], ctx.Parameters[1]),
+        _ => null
+    };
 }
 
 /// <summary>
@@ -467,7 +499,7 @@ internal abstract class ObsFilterCommandBase(IObsController obs) : IPluginComman
     protected abstract Task Execute(string sourceName, string filterName);
 
     protected static CommandDescriptor Describe(string commandName, string displayName, string icon,
-        string description) => new()
+        string description, IReadOnlyList<ButtonStateDescriptor>? states = null) => new()
     {
         CommandName = commandName,
         DisplayName = displayName,
@@ -480,7 +512,10 @@ internal abstract class ObsFilterCommandBase(IObsController obs) : IPluginComman
             new CommandParameter("SourceName", typeof(string)),
             new CommandParameter("FilterName", typeof(string))
         ],
-        HiddenFromMenu = true
+        HiddenFromMenu = true,
+        States = states ?? [],
+        // A command with states brings its own layers for every state.
+        ButtonLayout = states == null ? null : new ButtonLayoutDescriptor { Mode = ButtonLayoutMode.None }
     };
 }
 
@@ -504,12 +539,16 @@ internal sealed class ObsHideFilterCommand(IObsController obs) : ObsFilterComman
         Obs.SetFilterEnabled(sourceName, filterName, false);
 }
 
-internal sealed class ObsToggleFilterCommand(IObsController obs) : ObsFilterCommandBase(obs)
+internal sealed class ObsToggleFilterCommand(IObsController obs, ObsLiveState live)
+    : ObsFilterCommandBase(obs), IButtonStateCommand
 {
     public override CommandDescriptor Descriptor { get; } = Describe(
-        "System.ObsToggleFilter", "Toggle Filter", "\U000F0D04", // mdi-eye-check
-        "Enable or disable a filter on a source or scene");
+        ObsLiveState.ToggleFilterCommand, "Toggle Filter", "\U000F0D04", // mdi-eye-check
+        "Enable or disable a filter on a source or scene, and show whether it is enabled", ObsStates.Filter);
 
     protected override Task Execute(string sourceName, string filterName) =>
         Obs.ToggleFilter(sourceName, filterName);
+
+    public string? GetButtonState(CommandContext ctx) =>
+        ctx.Parameters.Length == 2 ? live.GetFilterState(ctx.Parameters[0], ctx.Parameters[1]) : null;
 }

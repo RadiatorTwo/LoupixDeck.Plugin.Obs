@@ -33,6 +33,30 @@ public interface IObsController
     /// <summary>Raised when studio mode is enabled or disabled.</summary>
     event Action<bool> StudioModeChanged;
 
+    /// <summary>Raised with the new program scene's name.</summary>
+    event Action<string> ProgramSceneChanged;
+
+    /// <summary>Raised with the new studio mode preview scene's name.</summary>
+    event Action<string> PreviewSceneChanged;
+
+    /// <summary>Raised when a scene item is shown or hidden: scene name, scene item id, enabled.</summary>
+    event Action<string, int, bool> SceneItemEnabledChanged;
+
+    /// <summary>Raised when an item was added to or removed from the named scene.</summary>
+    event Action<string> SceneItemsChanged;
+
+    /// <summary>Raised when a filter is enabled or disabled: source name, filter name, enabled.</summary>
+    event Action<string, string, bool> FilterEnabledChanged;
+
+    /// <summary>Raised when a filter was added to, removed from or renamed on the named source.</summary>
+    event Action<string> FiltersChanged;
+
+    /// <summary>Raised when an input is muted or unmuted: input name, muted.</summary>
+    event Action<string, bool> InputMuteChanged;
+
+    /// <summary>Raised when a scene or an input was renamed, or the scene list changed.</summary>
+    event Action NamesChanged;
+
     /// <summary>Sets the connection parameters used by subsequent connects.</summary>
     void Configure(string ip, int port, string password);
 
@@ -90,6 +114,21 @@ public interface IObsController
 
     /// <summary>Names of the filters on a source or scene, for the dynamic "Filters" submenu.</summary>
     Task<List<string>> GetFilterNames(string sourceName);
+
+    // The queries below feed the live button states. Each returns null when OBS cannot be asked
+    // (not connected, or the request failed), so the caller keeps no wrong answer.
+
+    /// <summary>The program scene and the studio mode preview scene (null outside studio mode).</summary>
+    Task<(string Program, string? Preview)?> GetCurrentScenes();
+
+    /// <summary>The items of a scene by source name: their scene item id and whether they are shown.</summary>
+    Task<Dictionary<string, (int Id, bool Enabled)>?> GetSceneItemStates(string sceneName);
+
+    /// <summary>The filters of a source or scene by name, and whether each is enabled.</summary>
+    Task<Dictionary<string, bool>?> GetFilterStates(string sourceName);
+
+    /// <summary>Whether an input is muted.</summary>
+    Task<bool?> GetInputMuted(string inputName);
 }
 
 /// <inheritdoc cref="IObsController"/>
@@ -126,6 +165,14 @@ public sealed class ObsController : IObsController
     public event Action<bool>? VirtualCamActiveChanged;
     public event Action<bool>? StreamActiveChanged;
     public event Action<bool>? StudioModeChanged;
+    public event Action<string>? ProgramSceneChanged;
+    public event Action<string>? PreviewSceneChanged;
+    public event Action<string, int, bool>? SceneItemEnabledChanged;
+    public event Action<string>? SceneItemsChanged;
+    public event Action<string, string, bool>? FilterEnabledChanged;
+    public event Action<string>? FiltersChanged;
+    public event Action<string, bool>? InputMuteChanged;
+    public event Action? NamesChanged;
 
     /// <summary>
     /// Subscribes to the events of one connection. Every handler ignores a connection that has
@@ -192,6 +239,66 @@ public sealed class ObsController : IObsController
             if (ReferenceEquals(obs, _obs))
                 Raise(StudioModeChanged, e.StudioModeEnabled);
         };
+
+        obs.CurrentProgramSceneChanged += (_, e) =>
+        {
+            if (ReferenceEquals(obs, _obs))
+                Raise(ProgramSceneChanged, e.SceneName);
+        };
+        obs.CurrentPreviewSceneChanged += (_, e) =>
+        {
+            if (ReferenceEquals(obs, _obs))
+                Raise(PreviewSceneChanged, e.SceneName);
+        };
+        obs.SceneItemEnableStateChanged += (_, e) =>
+        {
+            if (ReferenceEquals(obs, _obs))
+                Raise(SceneItemEnabledChanged, e.SceneName, e.SceneItemId, e.SceneItemEnabled);
+        };
+        obs.SceneItemCreated += (_, e) =>
+        {
+            if (ReferenceEquals(obs, _obs))
+                Raise(SceneItemsChanged, e.SceneName);
+        };
+        obs.SceneItemRemoved += (_, e) =>
+        {
+            if (ReferenceEquals(obs, _obs))
+                Raise(SceneItemsChanged, e.SceneName);
+        };
+        obs.SourceFilterEnableStateChanged += (_, e) =>
+        {
+            if (ReferenceEquals(obs, _obs))
+                Raise(FilterEnabledChanged, e.SourceName, e.FilterName, e.FilterEnabled);
+        };
+        obs.SourceFilterCreated += (_, e) =>
+        {
+            if (ReferenceEquals(obs, _obs))
+                Raise(FiltersChanged, e.SourceName);
+        };
+        obs.SourceFilterRemoved += (_, e) =>
+        {
+            if (ReferenceEquals(obs, _obs))
+                Raise(FiltersChanged, e.SourceName);
+        };
+        obs.SourceFilterNameChanged += (_, e) =>
+        {
+            if (ReferenceEquals(obs, _obs))
+                Raise(FiltersChanged, e.SourceName);
+        };
+        obs.InputMuteStateChanged += (_, e) =>
+        {
+            if (ReferenceEquals(obs, _obs))
+                Raise(InputMuteChanged, e.InputName, e.InputMuted);
+        };
+        obs.SceneNameChanged += (_, _) => RaiseNamesChanged(obs);
+        obs.InputNameChanged += (_, _) => RaiseNamesChanged(obs);
+        obs.SceneListChanged += (_, _) => RaiseNamesChanged(obs);
+    }
+
+    private void RaiseNamesChanged(OBSWebsocket obs)
+    {
+        if (ReferenceEquals(obs, _obs))
+            Raise(() => NamesChanged?.Invoke());
     }
 
     /// <summary>
@@ -245,11 +352,19 @@ public sealed class ObsController : IObsController
     }
 
     /// <summary>Invokes a state handler without letting a subscriber's failure reach the websocket.</summary>
-    private static void Raise<T>(Action<T>? handler, T value)
+    private static void Raise<T>(Action<T>? handler, T value) => Raise(() => handler?.Invoke(value));
+
+    private static void Raise<T1, T2>(Action<T1, T2>? handler, T1 first, T2 second) =>
+        Raise(() => handler?.Invoke(first, second));
+
+    private static void Raise<T1, T2, T3>(Action<T1, T2, T3>? handler, T1 first, T2 second, T3 third) =>
+        Raise(() => handler?.Invoke(first, second, third));
+
+    private static void Raise(Action dispatch)
     {
         try
         {
-            handler?.Invoke(value);
+            dispatch();
         }
         catch (Exception ex)
         {
@@ -697,6 +812,85 @@ public sealed class ObsController : IObsController
         {
             Console.WriteLine($"Error getting filters of OBS source '{sourceName}': {ex.Message}");
             return [];
+        }
+    }
+
+    public async Task<(string Program, string? Preview)?> GetCurrentScenes()
+    {
+        if (await GetConnectionAsync().ConfigureAwait(false) is not { } obs)
+            return null;
+
+        try
+        {
+            string program = obs.GetCurrentProgramScene();
+            // Outside studio mode there is no preview scene, and OBS answers the request with an error.
+            string? preview = obs.GetStudioModeEnabled() ? obs.GetCurrentPreviewScene() : null;
+            return (program, preview);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error getting the current OBS scenes: {ex.Message}");
+            return null;
+        }
+    }
+
+    public async Task<Dictionary<string, (int Id, bool Enabled)>?> GetSceneItemStates(string sceneName)
+    {
+        if (await GetConnectionAsync().ConfigureAwait(false) is not { } obs)
+            return null;
+
+        try
+        {
+            Dictionary<string, (int Id, bool Enabled)> items = new(StringComparer.Ordinal);
+            foreach (SceneItemDetails item in obs.GetSceneItemList(sceneName))
+            {
+                // A source placed twice in one scene: the commands act on the first one too.
+                if (!items.ContainsKey(item.SourceName))
+                    items[item.SourceName] = (item.ItemId, obs.GetSceneItemEnabled(sceneName, item.ItemId));
+            }
+
+            return items;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error getting the items of OBS scene '{sceneName}': {ex.Message}");
+            return null;
+        }
+    }
+
+    public async Task<Dictionary<string, bool>?> GetFilterStates(string sourceName)
+    {
+        if (await GetConnectionAsync().ConfigureAwait(false) is not { } obs)
+            return null;
+
+        try
+        {
+            Dictionary<string, bool> filters = new(StringComparer.Ordinal);
+            foreach (FilterSettings filter in obs.GetSourceFilterList(sourceName))
+                filters[filter.Name] = filter.IsEnabled;
+
+            return filters;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error getting the filters of OBS source '{sourceName}': {ex.Message}");
+            return null;
+        }
+    }
+
+    public async Task<bool?> GetInputMuted(string inputName)
+    {
+        if (await GetConnectionAsync().ConfigureAwait(false) is not { } obs)
+            return null;
+
+        try
+        {
+            return obs.GetInputMute(inputName);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error getting the mute state of OBS input '{inputName}': {ex.Message}");
+            return null;
         }
     }
 

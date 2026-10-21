@@ -440,3 +440,76 @@ internal sealed class ObsToggleSourceCommand(IObsController obs) : ObsSourceComm
     protected override Task Execute(string sourceName, string sceneName) =>
         Obs.ToggleSource(sourceName, sceneName);
 }
+
+/// <summary>
+/// Base for the per-filter commands. They take the source (or scene) carrying the filter and the
+/// filter name, and are surfaced through the dynamic "Filters" submenu.
+/// </summary>
+internal abstract class ObsFilterCommandBase(IObsController obs) : IPluginCommand
+{
+    protected IObsController Obs { get; } = obs;
+
+    public abstract CommandDescriptor Descriptor { get; }
+
+    public ButtonTargets SupportedTargets => ButtonTargets.All;
+
+    public Task Execute(CommandContext ctx)
+    {
+        if (ctx.Parameters.Length != 2)
+        {
+            Console.WriteLine($"{Descriptor.CommandName}: invalid parameter count");
+            return Task.CompletedTask;
+        }
+
+        return Execute(ctx.Parameters[0], ctx.Parameters[1]);
+    }
+
+    protected abstract Task Execute(string sourceName, string filterName);
+
+    protected static CommandDescriptor Describe(string commandName, string displayName, string icon,
+        string description) => new()
+    {
+        CommandName = commandName,
+        DisplayName = displayName,
+        Group = "OBS",
+        Icon = icon,
+        Description = description,
+        ParameterTemplate = "({SourceName},{FilterName})",
+        Parameters =
+        [
+            new CommandParameter("SourceName", typeof(string)),
+            new CommandParameter("FilterName", typeof(string))
+        ],
+        HiddenFromMenu = true
+    };
+}
+
+internal sealed class ObsShowFilterCommand(IObsController obs) : ObsFilterCommandBase(obs)
+{
+    public override CommandDescriptor Descriptor { get; } = Describe(
+        "System.ObsShowFilter", "Show Filter", "\U000F0208", // mdi-eye
+        "Enable a filter on a source or scene");
+
+    protected override Task Execute(string sourceName, string filterName) =>
+        Obs.SetFilterEnabled(sourceName, filterName, true);
+}
+
+internal sealed class ObsHideFilterCommand(IObsController obs) : ObsFilterCommandBase(obs)
+{
+    public override CommandDescriptor Descriptor { get; } = Describe(
+        "System.ObsHideFilter", "Hide Filter", "\U000F0209", // mdi-eye-off
+        "Disable a filter on a source or scene");
+
+    protected override Task Execute(string sourceName, string filterName) =>
+        Obs.SetFilterEnabled(sourceName, filterName, false);
+}
+
+internal sealed class ObsToggleFilterCommand(IObsController obs) : ObsFilterCommandBase(obs)
+{
+    public override CommandDescriptor Descriptor { get; } = Describe(
+        "System.ObsToggleFilter", "Toggle Filter", "\U000F0D04", // mdi-eye-check
+        "Enable or disable a filter on a source or scene");
+
+    protected override Task Execute(string sourceName, string filterName) =>
+        Obs.ToggleFilter(sourceName, filterName);
+}

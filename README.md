@@ -23,6 +23,9 @@ Scene, audio, source and filter control, surfaced through the dynamic "Scenes",
 `System.ObsToggleSource`, `System.ObsShowFilter`, `System.ObsHideFilter`,
 `System.ObsToggleFilter`.
 
+The submenus follow OBS: they are rebuilt when OBS connects or disconnects, and when
+scenes, sources, filters or inputs are added, removed or renamed.
+
 The source commands take the source name plus an optional scene name. Picked from
 the "Sources" menu, the scene of the folder is set, so the button works whichever
 scene is on program, also for a source shown through a nested scene. Left at its

@@ -759,9 +759,8 @@ public sealed class ObsController : IObsController
     }
 
     /// <summary>
-    /// Resolves the scene a source command works on. The host can only fill a single
-    /// parameter from a menu selection, so the scene stays optional: unless the user pins
-    /// a scene name in the command's settings, the command follows the program scene.
+    /// Resolves the scene a source command works on. The menu pins the scene; an empty or
+    /// placeholder scene (command strings saved before that) follows the program scene.
     /// </summary>
     private static string ResolveScene(OBSWebsocket obs, string sceneName) =>
         string.IsNullOrWhiteSpace(sceneName) || sceneName == CurrentScenePlaceholder

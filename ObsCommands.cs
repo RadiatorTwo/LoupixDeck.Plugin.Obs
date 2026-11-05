@@ -419,8 +419,8 @@ internal abstract class ObsSourceCommandBase(IObsController obs) : IPluginComman
         Parameters =
         [
             new CommandParameter("SourceName", typeof(string)),
-            // Optional: the placeholder means "the current program scene". The host fills
-            // only the first parameter from a menu selection, so the scene has to default.
+            // Optional: the placeholder means "the current program scene". The menu pins the
+            // scene; the default keeps older command strings without one working.
             new CommandParameter("SceneName", typeof(string))
             {
                 DefaultValue = ObsController.CurrentScenePlaceholder

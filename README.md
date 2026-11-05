@@ -23,8 +23,10 @@ Scene, audio, source and filter control, surfaced through the dynamic "Scenes",
 `System.ObsToggleSource`, `System.ObsShowFilter`, `System.ObsHideFilter`,
 `System.ObsToggleFilter`.
 
-The source commands take the source name plus an optional scene name; left at
-its `<current>` default the command follows the current program scene. The filter
+The source commands take the source name plus an optional scene name. Picked from
+the "Sources" menu, the scene of the folder is set, so the button works whichever
+scene is on program, also for a source shown through a nested scene. Left at its
+`<current>` default the command follows the current program scene. The filter
 commands take the scene or source that carries the filter, and the filter name.
 
 ## Button states

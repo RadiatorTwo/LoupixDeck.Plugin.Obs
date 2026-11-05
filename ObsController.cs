@@ -54,7 +54,7 @@ public interface IObsController
     /// <summary>Raised when an input is muted or unmuted: input name, muted.</summary>
     event Action<string, bool> InputMuteChanged;
 
-    /// <summary>Raised when a scene or an input was renamed, or the scene list changed.</summary>
+    /// <summary>Raised when a scene or an input was renamed, created or removed.</summary>
     event Action NamesChanged;
 
     /// <summary>Sets the connection parameters used by subsequent connects.</summary>
@@ -306,6 +306,8 @@ public sealed class ObsController : IObsController
         obs.SceneNameChanged += (_, _) => RaiseNamesChanged(obs);
         obs.InputNameChanged += (_, _) => RaiseNamesChanged(obs);
         obs.SceneListChanged += (_, _) => RaiseNamesChanged(obs);
+        obs.InputCreated += (_, _) => RaiseNamesChanged(obs);
+        obs.InputRemoved += (_, _) => RaiseNamesChanged(obs);
     }
 
     private void RaiseNamesChanged(OBSWebsocket obs)

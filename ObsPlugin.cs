@@ -56,6 +56,12 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
         // Not connected yet: the buttons show it until the first connect succeeds.
         _controller.ConnectionChanged += ReportAvailability;
         ReportAvailability(false);
+
+        // The Scenes, Sources, Filters and Audio submenus list what OBS has right now.
+        _controller.ConnectionChanged += OnConnectionChangedForMenu;
+        _controller.NamesChanged += RequestMenuRefresh;
+        _controller.SceneItemsChanged += OnListChangedForMenu;
+        _controller.FiltersChanged += OnListChangedForMenu;
         _controller.Connect();
     }
 
@@ -64,7 +70,29 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
         _stateReporter.Detach();
         _liveState.Detach();
         _controller.ConnectionChanged -= ReportAvailability;
+        _controller.ConnectionChanged -= OnConnectionChangedForMenu;
+        _controller.NamesChanged -= RequestMenuRefresh;
+        _controller.SceneItemsChanged -= OnListChangedForMenu;
+        _controller.FiltersChanged -= OnListChangedForMenu;
         _controller.Disconnect();
+    }
+
+    private void OnConnectionChangedForMenu(bool connected) => RequestMenuRefresh();
+
+    private void OnListChangedForMenu(string sceneOrSourceName) => RequestMenuRefresh();
+
+    /// <summary>Asks the host to rebuild the OBS submenus; it merges a burst into one rebuild.</summary>
+    private void RequestMenuRefresh()
+    {
+        try
+        {
+            _host?.RequestMenuRefresh();
+        }
+        catch (Exception ex)
+        {
+            // MissingMethodException on a host older than SDK 1.36: the menus refresh on reload only.
+            _host?.Logger.Warn($"Could not ask the host to refresh the OBS menus: {ex.Message}");
+        }
     }
 
     /// <summary>Lets the host mark the OBS buttons while OBS is not connected.</summary>

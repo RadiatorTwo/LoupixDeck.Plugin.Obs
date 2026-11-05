@@ -68,7 +68,11 @@ unmute actions carry no states, like start and stop.
 Nothing is polled: OBS reports every change as an event, and LoupixDeck asks the
 plugin for a button's state only when the button is assigned or its editor closes.
 
-Requires LoupixDeck with SDK 1.34.0 or newer.
+While OBS is not connected, every OBS button is drawn dimmed with a "disconnected"
+symbol. The plugin tries to connect every 5 seconds, so the mark goes away on its
+own once OBS is running.
+
+Requires LoupixDeck with SDK 1.36.0 or newer.
 
 ## Settings
 

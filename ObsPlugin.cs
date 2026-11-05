@@ -29,7 +29,7 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
         Id = "obs",
         Name = "OBS Studio",
         Version = new Version(1, 5, 1),
-        SdkVersion = new Version(1, 34, 0),
+        SdkVersion = new Version(1, 36, 0),
         Author = "RadiatorTwo",
         Description = "Control OBS Studio (recording, streaming, replay buffer, virtual camera, scenes, sources, filters) via obs-websocket.",
         Icon = LoadIcon()
@@ -52,6 +52,10 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
         ApplySettings();
         _stateReporter.Attach(host);
         _liveState.Attach(host);
+
+        // Not connected yet: the buttons show it until the first connect succeeds.
+        _controller.ConnectionChanged += ReportAvailability;
+        ReportAvailability(false);
         _controller.Connect();
     }
 
@@ -59,7 +63,22 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
     {
         _stateReporter.Detach();
         _liveState.Detach();
+        _controller.ConnectionChanged -= ReportAvailability;
         _controller.Disconnect();
+    }
+
+    /// <summary>Lets the host mark the OBS buttons while OBS is not connected.</summary>
+    private void ReportAvailability(bool connected)
+    {
+        try
+        {
+            _host?.SetAvailable(connected);
+        }
+        catch (Exception ex)
+        {
+            // MissingMethodException on a host older than SDK 1.36: the buttons stay unmarked.
+            _host?.Logger.Warn($"Could not report the OBS connection to the host: {ex.Message}");
+        }
     }
 
     public override IEnumerable<IPluginCommand> GetCommands()

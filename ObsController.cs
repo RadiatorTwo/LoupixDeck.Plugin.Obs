@@ -60,12 +60,16 @@ public interface IObsController
     /// <summary>Sets the connection parameters used by subsequent connects.</summary>
     void Configure(string ip, int port, string password);
 
-    /// <summary>Connects in the background (fire and forget).</summary>
+    /// <summary>
+    /// Connects in the background (fire and forget) and keeps trying again every few seconds
+    /// while not connected, until <see cref="Disconnect"/>.
+    /// </summary>
     void Connect();
 
     /// <summary>Connects and waits for the result, with a short timeout.</summary>
     Task ConnectAndWaitAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>Closes the connection and stops trying to reconnect.</summary>
     void Disconnect();
 
     Task ToggleVirtualCamera();
@@ -136,6 +140,10 @@ public sealed class ObsController : IObsController
 {
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(5);
 
+    // How often a lost or never established connection is tried again, so the buttons pick up
+    // OBS when it is started (or restarted) after the plugin.
+    private static readonly TimeSpan ReconnectInterval = TimeSpan.FromSeconds(5);
+
     private readonly object _gate = new();
 
     // The connection currently in use, or null. A fresh OBSWebsocket is created for every
@@ -148,6 +156,11 @@ public sealed class ObsController : IObsController
     private Task<bool>? _connectTask;
     private int _generation;
     private string _lastError = "OBS is not connected.";
+
+    // The connect error last written to the log. The reconnect timer fails the same way every
+    // few seconds while OBS is closed; only a new error is logged.
+    private string? _loggedError;
+    private Timer? _reconnectTimer;
 
     private string _ip = "127.0.0.1";
     private int _port = 4455;
@@ -396,7 +409,21 @@ public sealed class ObsController : IObsController
     /// </summary>
     public void Connect()
     {
+        lock (_gate)
+            _reconnectTimer ??= new Timer(_ => Reconnect(), null, ReconnectInterval, ReconnectInterval);
+
         _ = EnsureConnectedAsync(ConsumeSettingsChanged());
+    }
+
+    /// <summary>Tries again while not connected; joins an attempt that is still running.</summary>
+    private void Reconnect()
+    {
+        // Under the gate, so a tick racing Disconnect() cannot connect after shutdown.
+        lock (_gate)
+        {
+            if (_reconnectTimer != null && !_identified)
+                _ = EnsureConnectedAsync(reconnect: false);
+        }
     }
 
     private bool ConsumeSettingsChanged()
@@ -498,7 +525,10 @@ public sealed class ObsController : IObsController
             }
 
             if (error == null && ReferenceEquals(obs, _obs))
+            {
+                _loggedError = null;
                 return true;
+            }
 
             _lastError = error ?? "OBS was disconnected.";
         }
@@ -521,7 +551,12 @@ public sealed class ObsController : IObsController
             obs.Disconnect();
         }
 
-        Console.WriteLine($"Error connecting to OBS: {_lastError}");
+        if (_lastError != _loggedError)
+        {
+            _loggedError = _lastError;
+            Console.WriteLine($"Error connecting to OBS: {_lastError}");
+        }
+
         return false;
     }
 
@@ -543,9 +578,9 @@ public sealed class ObsController : IObsController
             await client.ConnectAsync(_ip, _port, timeoutCts.Token).ConfigureAwait(false);
             return true;
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            Console.WriteLine($"OBS is not reachable at {Url}: {ex.Message}");
+            // Logged by the caller, once per error rather than on every reconnect attempt.
             return false;
         }
     }
@@ -566,6 +601,8 @@ public sealed class ObsController : IObsController
 
         lock (_gate)
         {
+            _reconnectTimer?.Dispose();
+            _reconnectTimer = null;
             _generation++;
             obs = _obs;
             wasIdentified = _identified;

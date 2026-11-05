@@ -28,7 +28,7 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
     {
         Id = "obs",
         Name = "OBS Studio",
-        Version = new Version(1, 5, 0),
+        Version = new Version(1, 5, 1),
         SdkVersion = new Version(1, 34, 0),
         Author = "RadiatorTwo",
         Description = "Control OBS Studio (recording, streaming, replay buffer, virtual camera, scenes, sources, filters) via obs-websocket.",

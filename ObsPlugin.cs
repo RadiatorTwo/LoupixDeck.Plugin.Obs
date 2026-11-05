@@ -224,10 +224,15 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
             {
                 foreach (string source in await _controller.GetSourceNames(scene.Name))
                 {
-                    // Only the first parameter is filled from a menu selection, so the
-                    // scene stays at its "current program scene" default; the scene folders
-                    // are there to find the source, not to pin it.
-                    Dictionary<string, string> parameters = new() { ["SourceName"] = source };
+                    // Pin the scene of the folder the source was picked from. Following the
+                    // program scene would miss a source that is only shown through a nested
+                    // scene. The source stays first so a host that only applies the first
+                    // value still gets the source name.
+                    Dictionary<string, string> parameters = new()
+                    {
+                        ["SourceName"] = source,
+                        ["SceneName"] = scene.Name
+                    };
 
                     sourceFolders.Add(new MenuNode
                     {

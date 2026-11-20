@@ -18,6 +18,9 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
     private readonly ObsStateReporter _stateReporter;
     private readonly ObsLiveState _liveState;
 
+    // Input names for the dial presets; replaced as a whole, never changed in place.
+    private volatile IReadOnlyList<string> _audioInputs = [];
+
     public ObsPlugin()
     {
         _stateReporter = new ObsStateReporter(_controller);
@@ -62,6 +65,10 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
         _controller.NamesChanged += RequestMenuRefresh;
         _controller.SceneItemsChanged += OnListChangedForMenu;
         _controller.FiltersChanged += OnListChangedForMenu;
+
+        // The dial presets offer one volume dial per input OBS has right now.
+        _controller.ConnectionChanged += OnConnectionChangedForPresets;
+        _controller.NamesChanged += ReloadAudioInputs;
         _controller.Connect();
     }
 
@@ -74,6 +81,8 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
         _controller.NamesChanged -= RequestMenuRefresh;
         _controller.SceneItemsChanged -= OnListChangedForMenu;
         _controller.FiltersChanged -= OnListChangedForMenu;
+        _controller.ConnectionChanged -= OnConnectionChangedForPresets;
+        _controller.NamesChanged -= ReloadAudioInputs;
         _controller.Disconnect();
     }
 
@@ -166,6 +175,22 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
         }
     ];
 
+    // ───────── Dial presets ─────────
+
+    /// <summary>
+    /// One "turn = volume, press = mute" preset per OBS input. The host reads presets
+    /// synchronously, so they come from the input list loaded on connect and on every rename,
+    /// never from a websocket round trip.
+    /// </summary>
+    public override IEnumerable<DialPresetDescriptor> GetDialPresets() =>
+        _audioInputs.Select(input => new DialPresetDescriptor
+        {
+            Id = "input-volume:" + input,
+            Name = $"OBS {input} volume",
+            Glyph = "\U000F057E", // mdi-volume-high
+            Actions = VolumeDialActions(input)
+        });
+
     /// <summary>The input volume command on all three gestures of a dial.</summary>
     private static Dictionary<RotaryAction, MenuCommandRef> VolumeDialActions(string inputName)
     {
@@ -179,6 +204,27 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
             [RotaryAction.Press] = volume
         };
     }
+
+    private void OnConnectionChangedForPresets(bool connected)
+    {
+        if (connected)
+            ReloadAudioInputs();
+        else
+            _audioInputs = [];
+    }
+
+    /// <summary>Reads the input names for the dial presets in the background.</summary>
+    private void ReloadAudioInputs() => _ = Task.Run(async () =>
+    {
+        try
+        {
+            _audioInputs = await _controller.GetInputNames();
+        }
+        catch (Exception ex)
+        {
+            _host?.Logger.Warn($"Could not read the OBS inputs for the dial presets: {ex.Message}");
+        }
+    });
 
     // ───────── IMenuContributor — dynamic submenus ─────────
 
@@ -248,7 +294,10 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
 
         try
         {
-            foreach (string input in await _controller.GetInputNames())
+            List<string> inputs = await _controller.GetInputNames();
+            _audioInputs = inputs;
+
+            foreach (string input in inputs)
             {
                 Dictionary<string, string> parameters = new() { ["InputName"] = input };
 

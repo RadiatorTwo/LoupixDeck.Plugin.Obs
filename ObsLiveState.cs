@@ -4,8 +4,8 @@ namespace LoupixDeck.Plugin.Obs;
 
 /// <summary>
 /// What OBS currently shows, for the per-button states of the scene, source, filter and audio
-/// commands: the program and preview scene, which scene items are shown, which filters are
-/// enabled and which inputs are muted.
+/// commands and the indicator of the volume dials: the program and preview scene, which scene
+/// items are shown, which filters are enabled, which inputs are muted and how loud they are.
 /// </summary>
 /// <remarks>
 /// Nothing is polled. The host asks <see cref="IButtonStateCommand.GetButtonState"/> per button,
@@ -20,11 +20,16 @@ internal sealed class ObsLiveState
     public const string ToggleSourceCommand = "System.ObsToggleSource";
     public const string ToggleFilterCommand = "System.ObsToggleFilter";
     public const string ToggleInputMuteCommand = "System.ObsToggleInputMute";
+    public const string InputVolumeCommand = ObsInputVolumeCommand.Name;
 
     private static readonly string[] AllCommands =
     [
-        SetSceneCommand, SetPreviewSceneCommand, ToggleSourceCommand, ToggleFilterCommand, ToggleInputMuteCommand
+        SetSceneCommand, SetPreviewSceneCommand, ToggleSourceCommand, ToggleFilterCommand, ToggleInputMuteCommand,
+        InputVolumeCommand
     ];
+
+    // A mute change shows on the mute toggles and on the volume dials.
+    private static readonly string[] MuteCommands = [ToggleInputMuteCommand, InputVolumeCommand];
 
     private readonly IObsController _obs;
     private readonly object _gate = new();
@@ -36,6 +41,7 @@ internal sealed class ObsLiveState
     private readonly Dictionary<string, Dictionary<string, (int Id, bool Enabled)>> _sceneItems = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Dictionary<string, bool>> _filters = new(StringComparer.Ordinal);
     private readonly Dictionary<string, bool> _muted = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, float> _volumeDb = new(StringComparer.Ordinal);
     private readonly HashSet<string> _pending = new(StringComparer.Ordinal);
     private int _generation;
 
@@ -57,6 +63,7 @@ internal sealed class ObsLiveState
         _obs.FilterEnabledChanged += OnFilterEnabledChanged;
         _obs.FiltersChanged += OnFiltersChanged;
         _obs.InputMuteChanged += OnInputMuteChanged;
+        _obs.InputVolumeChanged += OnInputVolumeChanged;
         _obs.NamesChanged += OnNamesChanged;
     }
 
@@ -72,6 +79,7 @@ internal sealed class ObsLiveState
         _obs.FilterEnabledChanged -= OnFilterEnabledChanged;
         _obs.FiltersChanged -= OnFiltersChanged;
         _obs.InputMuteChanged -= OnInputMuteChanged;
+        _obs.InputVolumeChanged -= OnInputVolumeChanged;
         _obs.NamesChanged -= OnNamesChanged;
         Clear();
     }
@@ -129,7 +137,7 @@ internal sealed class ObsLiveState
             }
         }
 
-        Fetch("scene:" + scene, ToggleSourceCommand, async () =>
+        Fetch("scene:" + scene, [ToggleSourceCommand], async () =>
         {
             Dictionary<string, (int Id, bool Enabled)>? items = await _obs.GetSceneItemStates(scene);
             if (items == null)
@@ -155,7 +163,7 @@ internal sealed class ObsLiveState
             }
         }
 
-        Fetch("filters:" + sourceName, ToggleFilterCommand, async () =>
+        Fetch("filters:" + sourceName, [ToggleFilterCommand], async () =>
         {
             Dictionary<string, bool>? filters = await _obs.GetFilterStates(sourceName);
             if (filters == null)
@@ -177,25 +185,77 @@ internal sealed class ObsLiveState
                 return muted ? ObsStates.Muted : ObsStates.Unmuted;
         }
 
-        Fetch("mute:" + inputName, ToggleInputMuteCommand, async () =>
-        {
-            bool? muted = await _obs.GetInputMuted(inputName);
-            if (muted == null)
-                return false;
-
-            lock (_gate)
-                _muted[inputName] = muted.Value;
-            return true;
-        });
+        FetchMute(inputName);
         return null;
     }
 
     /// <summary>
+    /// The volume of an input in dB and whether it is muted, for the dial indicator; null until
+    /// both are known. Whatever is missing is fetched in the background.
+    /// </summary>
+    public (float VolumeDb, bool Muted)? GetVolume(string inputName)
+    {
+        bool volumeKnown, muteKnown;
+        lock (_gate)
+        {
+            volumeKnown = _volumeDb.TryGetValue(inputName, out float volumeDb);
+            muteKnown = _muted.TryGetValue(inputName, out bool muted);
+            if (volumeKnown && muteKnown)
+                return (volumeDb, muted);
+        }
+
+        if (!volumeKnown)
+            FetchVolume(inputName);
+        if (!muteKnown)
+            FetchMute(inputName);
+        return null;
+    }
+
+    /// <summary>The cached volume of an input in dB, without fetching it.</summary>
+    public float? GetCachedVolumeDb(string inputName)
+    {
+        lock (_gate)
+            return _volumeDb.TryGetValue(inputName, out float volumeDb) ? volumeDb : null;
+    }
+
+    /// <summary>
+    /// Records a volume a dial just set, so the next tick builds on it before OBS confirms it.
+    /// </summary>
+    public void SetVolume(string inputName, float volumeDb)
+    {
+        lock (_gate)
+            _volumeDb[inputName] = volumeDb;
+        Refresh(InputVolumeCommand);
+    }
+
+    private void FetchMute(string inputName) => Fetch("mute:" + inputName, MuteCommands, async () =>
+    {
+        bool? muted = await _obs.GetInputMuted(inputName);
+        if (muted == null)
+            return false;
+
+        lock (_gate)
+            _muted[inputName] = muted.Value;
+        return true;
+    });
+
+    private void FetchVolume(string inputName) => Fetch("volume:" + inputName, [InputVolumeCommand], async () =>
+    {
+        float? volumeDb = await _obs.GetInputVolumeDb(inputName);
+        if (volumeDb == null)
+            return false;
+
+        lock (_gate)
+            _volumeDb[inputName] = volumeDb.Value;
+        return true;
+    });
+
+    /// <summary>
     /// Loads something not cached yet, once at a time per key, and asks the host to refresh
-    /// <paramref name="commandName"/> when it arrived. Nothing arrives while OBS cannot be asked,
+    /// <paramref name="commandNames"/> when it arrived. Nothing arrives while OBS cannot be asked,
     /// so a failed load does not loop: the buttons are only asked again after a successful one.
     /// </summary>
-    private void Fetch(string key, string commandName, Func<Task<bool>> load)
+    private void Fetch(string key, string[] commandNames, Func<Task<bool>> load)
     {
         int generation;
         lock (_gate)
@@ -227,7 +287,7 @@ internal sealed class ObsLiveState
             }
 
             if (loaded)
-                Refresh(commandName);
+                Refresh(commandNames);
         });
     }
 
@@ -353,7 +413,14 @@ internal sealed class ObsLiveState
     {
         lock (_gate)
             _muted[inputName] = muted;
-        Refresh(ToggleInputMuteCommand);
+        Refresh(MuteCommands);
+    }
+
+    private void OnInputVolumeChanged(string inputName, float volumeDb)
+    {
+        lock (_gate)
+            _volumeDb[inputName] = volumeDb;
+        Refresh(InputVolumeCommand);
     }
 
     /// <summary>A rename invalidates everything keyed by name; it is fetched again on demand.</summary>
@@ -365,9 +432,10 @@ internal sealed class ObsLiveState
             _sceneItems.Clear();
             _filters.Clear();
             _muted.Clear();
+            _volumeDb.Clear();
         }
 
-        Refresh(ToggleSourceCommand, ToggleFilterCommand, ToggleInputMuteCommand);
+        Refresh(ToggleSourceCommand, ToggleFilterCommand, ToggleInputMuteCommand, InputVolumeCommand);
     }
 
     private void Clear()
@@ -381,6 +449,7 @@ internal sealed class ObsLiveState
             _sceneItems.Clear();
             _filters.Clear();
             _muted.Clear();
+            _volumeDb.Clear();
         }
     }
 
@@ -393,7 +462,11 @@ internal sealed class ObsLiveState
         {
             try
             {
-                host.RefreshButtonStates(commandName);
+                // The volume dials have no button states, only an indicator to redraw.
+                if (commandName == InputVolumeCommand)
+                    host.RequestButtonRefresh(commandName);
+                else
+                    host.RefreshButtonStates(commandName);
             }
             catch (Exception ex)
             {

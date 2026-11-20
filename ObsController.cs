@@ -133,6 +133,19 @@ public interface IObsController
 
     /// <summary>Whether an input is muted.</summary>
     Task<bool?> GetInputMuted(string inputName);
+
+    // ───────── Input volume (rotary dials) ─────────
+
+    /// <summary>Raised when the volume of an input changed: input name and new volume in dB.</summary>
+    event Action<string, float> InputVolumeChanged;
+
+    /// <summary>The volume of an input in dB (negative infinity is silence), or null when unknown.</summary>
+    Task<float?> GetInputVolumeDb(string inputName);
+
+    /// <summary>
+    /// Sets the volume of an input in dB; negative infinity silences it. Returns whether OBS took it.
+    /// </summary>
+    Task<bool> SetInputVolumeDb(string inputName, float volumeDb);
 }
 
 /// <inheritdoc cref="IObsController"/>
@@ -185,6 +198,7 @@ public sealed class ObsController : IObsController
     public event Action<string, string, bool>? FilterEnabledChanged;
     public event Action<string>? FiltersChanged;
     public event Action<string, bool>? InputMuteChanged;
+    public event Action<string, float>? InputVolumeChanged;
     public event Action? NamesChanged;
 
     /// <summary>
@@ -302,6 +316,11 @@ public sealed class ObsController : IObsController
         {
             if (ReferenceEquals(obs, _obs))
                 Raise(InputMuteChanged, e.InputName, e.InputMuted);
+        };
+        obs.InputVolumeChanged += (_, e) =>
+        {
+            if (ReferenceEquals(obs, _obs) && e.Volume?.InputName is { } name)
+                Raise(InputVolumeChanged, name, ObsFader.MulToDb(e.Volume.InputVolumeMul));
         };
         obs.SceneNameChanged += (_, _) => RaiseNamesChanged(obs);
         obs.InputNameChanged += (_, _) => RaiseNamesChanged(obs);
@@ -929,6 +948,43 @@ public sealed class ObsController : IObsController
         {
             Console.WriteLine($"Error getting the mute state of OBS input '{inputName}': {ex.Message}");
             return null;
+        }
+    }
+
+    public async Task<float?> GetInputVolumeDb(string inputName)
+    {
+        if (await GetConnectionAsync().ConfigureAwait(false) is not { } obs)
+            return null;
+
+        try
+        {
+            return ObsFader.MulToDb(obs.GetInputVolume(inputName).VolumeMul);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error getting the volume of OBS input '{inputName}': {ex.Message}");
+            return null;
+        }
+    }
+
+    public async Task<bool> SetInputVolumeDb(string inputName, float volumeDb)
+    {
+        if (await GetConnectionAsync().ConfigureAwait(false) is not { } obs)
+            return false;
+
+        try
+        {
+            // OBS takes no -inf in dB; silence is a multiplier of 0.
+            if (float.IsNegativeInfinity(volumeDb))
+                obs.SetInputVolume(inputName, 0f, false);
+            else
+                obs.SetInputVolume(inputName, volumeDb, true);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error setting the volume of OBS input '{inputName}': {ex.Message}");
+            return false;
         }
     }
 

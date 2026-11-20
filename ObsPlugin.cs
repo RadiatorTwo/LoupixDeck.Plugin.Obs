@@ -18,6 +18,9 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
     private readonly ObsStateReporter _stateReporter;
     private readonly ObsLiveState _liveState;
 
+    // Input names for the dial presets; replaced as a whole, never changed in place.
+    private volatile IReadOnlyList<string> _audioInputs = [];
+
     public ObsPlugin()
     {
         _stateReporter = new ObsStateReporter(_controller);
@@ -28,7 +31,7 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
     {
         Id = "obs",
         Name = "OBS Studio",
-        Version = new Version(1, 6, 0),
+        Version = new Version(1, 7, 0),
         SdkVersion = new Version(1, 36, 0),
         Author = "RadiatorTwo",
         Description = "Control OBS Studio (recording, streaming, replay buffer, virtual camera, scenes, sources, filters) via obs-websocket.",
@@ -62,6 +65,10 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
         _controller.NamesChanged += RequestMenuRefresh;
         _controller.SceneItemsChanged += OnListChangedForMenu;
         _controller.FiltersChanged += OnListChangedForMenu;
+
+        // The dial presets offer one volume dial per input OBS has right now.
+        _controller.ConnectionChanged += OnConnectionChangedForPresets;
+        _controller.NamesChanged += ReloadAudioInputs;
         _controller.Connect();
     }
 
@@ -74,6 +81,8 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
         _controller.NamesChanged -= RequestMenuRefresh;
         _controller.SceneItemsChanged -= OnListChangedForMenu;
         _controller.FiltersChanged -= OnListChangedForMenu;
+        _controller.ConnectionChanged -= OnConnectionChangedForPresets;
+        _controller.NamesChanged -= ReloadAudioInputs;
         _controller.Disconnect();
     }
 
@@ -145,6 +154,7 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
             new ObsMuteInputCommand(_controller),
             new ObsUnmuteInputCommand(_controller),
             new ObsToggleInputMuteCommand(_controller, _liveState),
+            new ObsInputVolumeCommand(_controller, _liveState),
             new ObsShowSourceCommand(_controller),
             new ObsHideSourceCommand(_controller),
             new ObsToggleSourceCommand(_controller, _liveState),
@@ -164,6 +174,57 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
             Section = CommandGroupSection.Plugins
         }
     ];
+
+    // ───────── Dial presets ─────────
+
+    /// <summary>
+    /// One "turn = volume, press = mute" preset per OBS input. The host reads presets
+    /// synchronously, so they come from the input list loaded on connect and on every rename,
+    /// never from a websocket round trip.
+    /// </summary>
+    public override IEnumerable<DialPresetDescriptor> GetDialPresets() =>
+        _audioInputs.Select(input => new DialPresetDescriptor
+        {
+            Id = "input-volume:" + input,
+            Name = $"OBS {input} volume",
+            Glyph = "\U000F057E", // mdi-volume-high
+            Actions = VolumeDialActions(input)
+        });
+
+    /// <summary>The input volume command on all three gestures of a dial.</summary>
+    private static Dictionary<RotaryAction, MenuCommandRef> VolumeDialActions(string inputName)
+    {
+        Dictionary<string, string> parameters = new() { ["InputName"] = inputName };
+        MenuCommandRef volume = new() { CommandName = ObsInputVolumeCommand.Name, Parameters = parameters };
+
+        return new Dictionary<RotaryAction, MenuCommandRef>
+        {
+            [RotaryAction.CounterClockwise] = volume,
+            [RotaryAction.Clockwise] = volume,
+            [RotaryAction.Press] = volume
+        };
+    }
+
+    private void OnConnectionChangedForPresets(bool connected)
+    {
+        if (connected)
+            ReloadAudioInputs();
+        else
+            _audioInputs = [];
+    }
+
+    /// <summary>Reads the input names for the dial presets in the background.</summary>
+    private void ReloadAudioInputs() => _ = Task.Run(async () =>
+    {
+        try
+        {
+            _audioInputs = await _controller.GetInputNames();
+        }
+        catch (Exception ex)
+        {
+            _host?.Logger.Warn($"Could not read the OBS inputs for the dial presets: {ex.Message}");
+        }
+    });
 
     // ───────── IMenuContributor — dynamic submenus ─────────
 
@@ -198,7 +259,7 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
                 [
                     BuildSceneFolder("Scenes", "System.ObsSetScene", scenes),
                     BuildSceneFolder("Preview Scenes", "System.ObsSetPreviewScene", scenes),
-                    await BuildAudioFolder(),
+                    await BuildAudioFolder(target),
                     await BuildSourcesFolder(scenes),
                     await BuildFiltersFolder(scenes)
                 ]
@@ -222,32 +283,53 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
         return new MenuNode { Name = folderName, Children = children };
     }
 
-    /// <summary>One folder per input, offering mute / unmute / toggle.</summary>
-    private async Task<MenuNode> BuildAudioFolder()
+    /// <summary>
+    /// One folder per input, offering mute / unmute / toggle and, for a rotary encoder, the volume
+    /// dial: a "Volume Control" group that fills turn left, turn right and press in one click.
+    /// </summary>
+    private async Task<MenuNode> BuildAudioFolder(ButtonTargets target)
     {
         List<MenuNode> children = [];
+        bool forDial = target.HasFlag(ButtonTargets.RotaryEncoder);
 
         try
         {
-            foreach (string input in await _controller.GetInputNames())
+            List<string> inputs = await _controller.GetInputNames();
+            _audioInputs = inputs;
+
+            foreach (string input in inputs)
             {
                 Dictionary<string, string> parameters = new() { ["InputName"] = input };
 
-                children.Add(new MenuNode
+                List<MenuNode> actions = [];
+
+                if (forDial)
                 {
-                    Name = input,
-                    Children =
-                    [
-                        new MenuNode { Name = "Mute", CommandName = "System.ObsMuteInput", Parameters = parameters },
-                        new MenuNode { Name = "Unmute", CommandName = "System.ObsUnmuteInput", Parameters = parameters },
-                        new MenuNode
-                        {
-                            Name = "Toggle Mute",
-                            CommandName = "System.ObsToggleInputMute",
-                            Parameters = parameters
-                        }
-                    ]
+                    actions.Add(new MenuNode
+                    {
+                        Name = "Volume Control",
+                        // One adjustment command on all three gestures: the tick delta carries the
+                        // direction, the press toggles mute, and the dial shows the level.
+                        RotaryGroup = VolumeDialActions(input)
+                    });
+                    actions.Add(new MenuNode
+                    {
+                        Name = "Volume",
+                        CommandName = ObsInputVolumeCommand.Name,
+                        Parameters = parameters
+                    });
+                }
+
+                actions.Add(new MenuNode { Name = "Mute", CommandName = "System.ObsMuteInput", Parameters = parameters });
+                actions.Add(new MenuNode { Name = "Unmute", CommandName = "System.ObsUnmuteInput", Parameters = parameters });
+                actions.Add(new MenuNode
+                {
+                    Name = "Toggle Mute",
+                    CommandName = "System.ObsToggleInputMute",
+                    Parameters = parameters
                 });
+
+                children.Add(new MenuNode { Name = input, Children = actions });
             }
         }
         catch (Exception ex)

@@ -385,14 +385,17 @@ internal sealed class ObsToggleInputMuteCommand(IObsController obs, ObsLiveState
 /// <summary>
 /// Dial command: turning the knob moves an input's volume along OBS's mixer fader, pressing it
 /// toggles mute. The dial indicator shows the volume in dB (or "Muted"). Surfaced per input
-/// through the dynamic "Audio" submenu, also as a one-click "Volume Knob" group.
+/// through the dynamic "Audio" submenu, as a one-click "Volume Control" group and as a dial preset.
 /// </summary>
-internal sealed class ObsInputVolumeCommand(IObsController obs) : IAdjustmentCommand
+internal sealed class ObsInputVolumeCommand(IObsController obs, ObsLiveState live) : IAdjustmentCommand
 {
     public const string Name = "System.ObsInputVolume";
 
     /// <summary>Fader percent per tick when the command string carries no step.</summary>
-    private const double DefaultStepPercent = 2;
+    private const int DefaultStepPercent = 2;
+
+    // One dial tick at a time, so fast turns build on each other instead of racing.
+    private readonly SemaphoreSlim _gate = new(1, 1);
 
     public CommandDescriptor Descriptor { get; } = new()
     {
@@ -405,8 +408,8 @@ internal sealed class ObsInputVolumeCommand(IObsController obs) : IAdjustmentCom
         Parameters =
         [
             new CommandParameter("InputName", typeof(string)),
-            // Optional: percent of the OBS mixer fader per knob tick.
-            new CommandParameter("Step", typeof(string))
+            // Optional: percent of the OBS mixer fader per dial tick.
+            new CommandParameter("Step", typeof(int))
             {
                 DefaultValue = DefaultStepPercent.ToString(System.Globalization.CultureInfo.InvariantCulture)
             }
@@ -416,14 +419,34 @@ internal sealed class ObsInputVolumeCommand(IObsController obs) : IAdjustmentCom
 
     public ButtonTargets SupportedTargets => ButtonTargets.RotaryEncoder;
 
-    public Task ApplyAdjustment(CommandContext ctx, int ticks)
+    public async Task ApplyAdjustment(CommandContext ctx, int ticks)
     {
         if (InputName(ctx) is not { } input || ticks == 0)
-            return Task.CompletedTask;
+            return;
 
-        return obs.AdjustInputVolume(input, ticks * Step(ctx) / 100d);
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            float? currentDb = live.GetCachedVolumeDb(input) ?? await obs.GetInputVolumeDb(input).ConfigureAwait(false);
+            if (currentDb == null)
+                return; // OBS not connected or the input is gone.
+
+            double position = Math.Clamp(ObsFader.DbToPosition(currentDb.Value) + (ticks * Step(ctx) / 100d), 0d, 1d);
+            float newDb = ObsFader.PositionToDb(position);
+
+            if (await obs.SetInputVolumeDb(input, newDb).ConfigureAwait(false))
+                live.SetVolume(input, newDb);
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
+    /// <summary>
+    /// The press toggles mute rather than resetting the volume: muting is what a volume dial's
+    /// press is expected to do, and it keeps the fader position for unmuting.
+    /// </summary>
     public Task ApplyReset(CommandContext ctx) =>
         InputName(ctx) is { } input ? obs.ToggleInputMute(input) : Task.CompletedTask;
 
@@ -432,7 +455,7 @@ internal sealed class ObsInputVolumeCommand(IObsController obs) : IAdjustmentCom
 
     public AdjustmentValue? GetValue(CommandContext ctx)
     {
-        if (InputName(ctx) is not { } input || obs.GetCachedInputVolume(input) is not { } volume)
+        if (InputName(ctx) is not { } input || live.GetVolume(input) is not { } volume)
             return null;
 
         double position = ObsFader.DbToPosition(volume.VolumeDb);
@@ -448,18 +471,14 @@ internal sealed class ObsInputVolumeCommand(IObsController obs) : IAdjustmentCom
     private static string? InputName(CommandContext ctx) =>
         ctx.Parameters.Length >= 1 && !string.IsNullOrWhiteSpace(ctx.Parameters[0]) ? ctx.Parameters[0] : null;
 
-    private static double Step(CommandContext ctx)
-    {
-        if (ctx.Parameters.Length >= 2 &&
-            double.TryParse(ctx.Parameters[1].Replace(',', '.'), System.Globalization.NumberStyles.Float,
-                System.Globalization.CultureInfo.InvariantCulture, out double step) &&
-            step > 0)
-        {
-            return Math.Min(step, 100d);
-        }
-
-        return DefaultStepPercent;
-    }
+    /// <summary>The step in percent of the fader, 1 to 100; the default when missing or invalid.</summary>
+    private static int Step(CommandContext ctx) =>
+        ctx.Parameters.Length >= 2 &&
+        int.TryParse(ctx.Parameters[1], System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture, out int step) &&
+        step > 0
+            ? Math.Min(step, 100)
+            : DefaultStepPercent;
 }
 
 /// <summary>

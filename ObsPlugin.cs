@@ -62,9 +62,6 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
         _controller.NamesChanged += RequestMenuRefresh;
         _controller.SceneItemsChanged += OnListChangedForMenu;
         _controller.FiltersChanged += OnListChangedForMenu;
-
-        // Volume dials redraw their indicator when OBS reports a new volume or mute state.
-        _controller.InputVolumeChanged += OnInputVolumeChanged;
         _controller.Connect();
     }
 
@@ -77,20 +74,7 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
         _controller.NamesChanged -= RequestMenuRefresh;
         _controller.SceneItemsChanged -= OnListChangedForMenu;
         _controller.FiltersChanged -= OnListChangedForMenu;
-        _controller.InputVolumeChanged -= OnInputVolumeChanged;
         _controller.Disconnect();
-    }
-
-    private void OnInputVolumeChanged(string inputName)
-    {
-        try
-        {
-            _host?.RequestButtonRefresh(ObsInputVolumeCommand.Name);
-        }
-        catch (Exception ex)
-        {
-            _host?.Logger.Warn($"Could not refresh the OBS volume dials: {ex.Message}");
-        }
     }
 
     private void OnConnectionChangedForMenu(bool connected) => RequestMenuRefresh();
@@ -161,7 +145,7 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
             new ObsMuteInputCommand(_controller),
             new ObsUnmuteInputCommand(_controller),
             new ObsToggleInputMuteCommand(_controller, _liveState),
-            new ObsInputVolumeCommand(_controller),
+            new ObsInputVolumeCommand(_controller, _liveState),
             new ObsShowSourceCommand(_controller),
             new ObsHideSourceCommand(_controller),
             new ObsToggleSourceCommand(_controller, _liveState),
@@ -181,6 +165,20 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
             Section = CommandGroupSection.Plugins
         }
     ];
+
+    /// <summary>The input volume command on all three gestures of a dial.</summary>
+    private static Dictionary<RotaryAction, MenuCommandRef> VolumeDialActions(string inputName)
+    {
+        Dictionary<string, string> parameters = new() { ["InputName"] = inputName };
+        MenuCommandRef volume = new() { CommandName = ObsInputVolumeCommand.Name, Parameters = parameters };
+
+        return new Dictionary<RotaryAction, MenuCommandRef>
+        {
+            [RotaryAction.CounterClockwise] = volume,
+            [RotaryAction.Clockwise] = volume,
+            [RotaryAction.Press] = volume
+        };
+    }
 
     // ───────── IMenuContributor — dynamic submenus ─────────
 
@@ -241,7 +239,7 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
 
     /// <summary>
     /// One folder per input, offering mute / unmute / toggle and, for a rotary encoder, the volume
-    /// dial: a "Volume Knob" group that fills turn left, turn right and press in one click.
+    /// dial: a "Volume Control" group that fills turn left, turn right and press in one click.
     /// </summary>
     private async Task<MenuNode> BuildAudioFolder(ButtonTargets target)
     {
@@ -258,21 +256,18 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
 
                 if (forDial)
                 {
-                    var volume = new MenuCommandRef { CommandName = ObsInputVolumeCommand.Name, Parameters = parameters };
-
                     actions.Add(new MenuNode
                     {
-                        Name = "Volume Knob (turn = volume, press = mute)",
-                        RotaryGroup = new Dictionary<RotaryAction, MenuCommandRef>
-                        {
-                            [RotaryAction.CounterClockwise] = volume,
-                            [RotaryAction.Clockwise] = volume,
-                            [RotaryAction.Press] = volume
-                        }
+                        Name = "Volume Control",
+                        // One adjustment command on all three gestures: the tick delta carries the
+                        // direction, the press toggles mute, and the dial shows the level.
+                        RotaryGroup = VolumeDialActions(input)
                     });
                     actions.Add(new MenuNode
                     {
-                        Name = "Volume", CommandName = ObsInputVolumeCommand.Name, Parameters = parameters
+                        Name = "Volume",
+                        CommandName = ObsInputVolumeCommand.Name,
+                        Parameters = parameters
                     });
                 }
 

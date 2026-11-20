@@ -136,21 +136,16 @@ public interface IObsController
 
     // ───────── Input volume (rotary dials) ─────────
 
-    /// <summary>Raised when the volume of an input changed (in OBS or from a dial): input name.</summary>
-    event Action<string> InputVolumeChanged;
+    /// <summary>Raised when the volume of an input changed: input name and new volume in dB.</summary>
+    event Action<string, float> InputVolumeChanged;
+
+    /// <summary>The volume of an input in dB (negative infinity is silence), or null when unknown.</summary>
+    Task<float?> GetInputVolumeDb(string inputName);
 
     /// <summary>
-    /// Moves the volume of an input along OBS's own mixer fader by <paramref name="faderDelta"/>
-    /// (a fraction of the whole fader, e.g. 0.02 = 2 %). Positive is louder.
+    /// Sets the volume of an input in dB; negative infinity silences it. Returns whether OBS took it.
     /// </summary>
-    Task AdjustInputVolume(string inputName, double faderDelta);
-
-    /// <summary>
-    /// The last known volume of an input in dB and its mute state, without asking OBS. When the
-    /// volume is not known yet a background read is started and <see cref="InputVolumeChanged"/>
-    /// fires once it arrives. Fast and synchronous, for the dial indicator.
-    /// </summary>
-    (float VolumeDb, bool Muted)? GetCachedInputVolume(string inputName);
+    Task<bool> SetInputVolumeDb(string inputName, float volumeDb);
 }
 
 /// <inheritdoc cref="IObsController"/>
@@ -203,20 +198,8 @@ public sealed class ObsController : IObsController
     public event Action<string, string, bool>? FilterEnabledChanged;
     public event Action<string>? FiltersChanged;
     public event Action<string, bool>? InputMuteChanged;
+    public event Action<string, float>? InputVolumeChanged;
     public event Action? NamesChanged;
-    public event Action<string>? InputVolumeChanged;
-
-    // Last known volume (dB) and mute state per input, kept current by OBS events so the dial
-    // indicator never has to wait for a websocket round trip.
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, float> _volumeDbCache =
-        new(StringComparer.Ordinal);
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _muteCache =
-        new(StringComparer.Ordinal);
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _volumeReads =
-        new(StringComparer.Ordinal);
-
-    // One dial turn at a time, so fast ticks build on each other instead of racing.
-    private readonly SemaphoreSlim _volumeGate = new(1, 1);
 
     /// <summary>
     /// Subscribes to the events of one connection. Every handler ignores a connection that has
@@ -331,20 +314,13 @@ public sealed class ObsController : IObsController
         };
         obs.InputMuteStateChanged += (_, e) =>
         {
-            if (!ReferenceEquals(obs, _obs))
-                return;
-
-            _muteCache[e.InputName] = e.InputMuted;
-            Raise(InputMuteChanged, e.InputName, e.InputMuted);
-            Raise(InputVolumeChanged, e.InputName);
+            if (ReferenceEquals(obs, _obs))
+                Raise(InputMuteChanged, e.InputName, e.InputMuted);
         };
         obs.InputVolumeChanged += (_, e) =>
         {
-            if (!ReferenceEquals(obs, _obs) || e.Volume?.InputName is not { } name)
-                return;
-
-            _volumeDbCache[name] = ObsFader.MulToDb(e.Volume.InputVolumeMul);
-            Raise(InputVolumeChanged, name);
+            if (ReferenceEquals(obs, _obs) && e.Volume?.InputName is { } name)
+                Raise(InputVolumeChanged, name, ObsFader.MulToDb(e.Volume.InputVolumeMul));
         };
         obs.SceneNameChanged += (_, _) => RaiseNamesChanged(obs);
         obs.InputNameChanged += (_, _) => RaiseNamesChanged(obs);
@@ -387,9 +363,6 @@ public sealed class ObsController : IObsController
     /// <summary>Reports every tracked output as inactive — nothing is running once OBS is gone.</summary>
     private void ReportDisconnected()
     {
-        // OBS may come back with other volumes; read them fresh after the next connect.
-        _volumeDbCache.Clear();
-        _muteCache.Clear();
         Raise(ConnectionChanged, false);
         Raise(RecordStateChanged, ObsRecordState.Stopped);
         Raise(ReplayBufferActiveChanged, false);
@@ -978,74 +951,41 @@ public sealed class ObsController : IObsController
         }
     }
 
-    public async Task AdjustInputVolume(string inputName, double faderDelta)
+    public async Task<float?> GetInputVolumeDb(string inputName)
     {
         if (await GetConnectionAsync().ConfigureAwait(false) is not { } obs)
-            return;
+            return null;
 
-        await _volumeGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            if (!_volumeDbCache.TryGetValue(inputName, out float currentDb))
-            {
-                VolumeInfo info = obs.GetInputVolume(inputName);
-                currentDb = ObsFader.MulToDb(info.VolumeMul);
-            }
-
-            double position = Math.Clamp(ObsFader.DbToPosition(currentDb) + faderDelta, 0d, 1d);
-            float newDb = ObsFader.PositionToDb(position);
-
-            if (float.IsNegativeInfinity(newDb))
-                obs.SetInputVolume(inputName, 0f, false); // silence: OBS's -inf
-            else
-                obs.SetInputVolume(inputName, newDb, true);
-
-            _volumeDbCache[inputName] = newDb;
+            return ObsFader.MulToDb(obs.GetInputVolume(inputName).VolumeMul);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error changing the volume of input '{inputName}': {ex.Message}");
+            Console.WriteLine($"Error getting the volume of OBS input '{inputName}': {ex.Message}");
+            return null;
         }
-        finally
-        {
-            _volumeGate.Release();
-        }
-
-        Raise(InputVolumeChanged, inputName);
     }
 
-    public (float VolumeDb, bool Muted)? GetCachedInputVolume(string inputName)
+    public async Task<bool> SetInputVolumeDb(string inputName, float volumeDb)
     {
-        if (_volumeDbCache.TryGetValue(inputName, out float db))
-            return (db, _muteCache.TryGetValue(inputName, out bool muted) && muted);
+        if (await GetConnectionAsync().ConfigureAwait(false) is not { } obs)
+            return false;
 
-        // Not known yet: read it in the background (once at a time per input) and announce it.
-        if (_identified && _volumeReads.TryAdd(inputName, 0))
+        try
         {
-            _ = Task.Run(() =>
-            {
-                try
-                {
-                    if (_obs is not { } obs || !_identified)
-                        return;
-
-                    VolumeInfo info = obs.GetInputVolume(inputName);
-                    _volumeDbCache[inputName] = ObsFader.MulToDb(info.VolumeMul);
-                    _muteCache[inputName] = obs.GetInputMute(inputName);
-                    Raise(InputVolumeChanged, inputName);
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Error reading the volume of input '{inputName}': {ex.Message}");
-                }
-                finally
-                {
-                    _volumeReads.TryRemove(inputName, out _);
-                }
-            });
+            // OBS takes no -inf in dB; silence is a multiplier of 0.
+            if (float.IsNegativeInfinity(volumeDb))
+                obs.SetInputVolume(inputName, 0f, false);
+            else
+                obs.SetInputVolume(inputName, volumeDb, true);
+            return true;
         }
-
-        return null;
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error setting the volume of OBS input '{inputName}': {ex.Message}");
+            return false;
+        }
     }
 
     private static void Guarded(Action action, string what)

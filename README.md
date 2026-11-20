@@ -32,6 +32,19 @@ scene is on program, also for a source shown through a nested scene. Left at its
 `<current>` default the command follows the current program scene. The filter
 commands take the scene or source that carries the filter, and the filter name.
 
+## Volume dials
+
+`System.ObsInputVolume` puts an input's volume on a rotary dial: turning moves it
+along the OBS mixer fader, so every tick feels like dragging the mixer slider (fine
+steps near 0 dB, coarse ones near silence), and pressing mutes or unmutes the input.
+The dial shows the volume in dB, or `Muted`, and follows changes made in OBS itself.
+
+The command takes the input name and an optional step in percent of the fader per
+tick (default `2`). For a dial, each input in the "Audio" submenu offers it as
+"Volume Control", which fills turn left, turn right and press in one go, and as a
+plain "Volume" entry. Each input is also offered as a dial preset. On a touch
+button or in a macro the command toggles mute.
+
 ## Button states
 
 The five toggle commands declare their own states, so assigning one to a button

@@ -383,6 +383,86 @@ internal sealed class ObsToggleInputMuteCommand(IObsController obs, ObsLiveState
 }
 
 /// <summary>
+/// Dial command: turning the knob moves an input's volume along OBS's mixer fader, pressing it
+/// toggles mute. The dial indicator shows the volume in dB (or "Muted"). Surfaced per input
+/// through the dynamic "Audio" submenu, also as a one-click "Volume Knob" group.
+/// </summary>
+internal sealed class ObsInputVolumeCommand(IObsController obs) : IAdjustmentCommand
+{
+    public const string Name = "System.ObsInputVolume";
+
+    /// <summary>Fader percent per tick when the command string carries no step.</summary>
+    private const double DefaultStepPercent = 2;
+
+    public CommandDescriptor Descriptor { get; } = new()
+    {
+        CommandName = Name,
+        DisplayName = "Input Volume",
+        Group = "OBS",
+        Icon = "\U000F057E", // mdi-volume-high
+        Description = "Turn to change the volume of an audio input, press to mute or unmute it",
+        ParameterTemplate = "({InputName},{Step})",
+        Parameters =
+        [
+            new CommandParameter("InputName", typeof(string)),
+            // Optional: percent of the OBS mixer fader per knob tick.
+            new CommandParameter("Step", typeof(string))
+            {
+                DefaultValue = DefaultStepPercent.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            }
+        ],
+        HiddenFromMenu = true
+    };
+
+    public ButtonTargets SupportedTargets => ButtonTargets.RotaryEncoder;
+
+    public Task ApplyAdjustment(CommandContext ctx, int ticks)
+    {
+        if (InputName(ctx) is not { } input || ticks == 0)
+            return Task.CompletedTask;
+
+        return obs.AdjustInputVolume(input, ticks * Step(ctx) / 100d);
+    }
+
+    public Task ApplyReset(CommandContext ctx) =>
+        InputName(ctx) is { } input ? obs.ToggleInputMute(input) : Task.CompletedTask;
+
+    /// <summary>Outside a dial (touch button, macro, CLI) the command toggles mute.</summary>
+    public Task Execute(CommandContext ctx) => ApplyReset(ctx);
+
+    public AdjustmentValue? GetValue(CommandContext ctx)
+    {
+        if (InputName(ctx) is not { } input || obs.GetCachedInputVolume(input) is not { } volume)
+            return null;
+
+        double position = ObsFader.DbToPosition(volume.VolumeDb);
+        string text = volume.Muted
+            ? "Muted"
+            : float.IsNegativeInfinity(volume.VolumeDb)
+                ? "-inf dB"
+                : volume.VolumeDb.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " dB";
+
+        return new AdjustmentValue(position, text) { Detail = input };
+    }
+
+    private static string? InputName(CommandContext ctx) =>
+        ctx.Parameters.Length >= 1 && !string.IsNullOrWhiteSpace(ctx.Parameters[0]) ? ctx.Parameters[0] : null;
+
+    private static double Step(CommandContext ctx)
+    {
+        if (ctx.Parameters.Length >= 2 &&
+            double.TryParse(ctx.Parameters[1].Replace(',', '.'), System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out double step) &&
+            step > 0)
+        {
+            return Math.Min(step, 100d);
+        }
+
+        return DefaultStepPercent;
+    }
+}
+
+/// <summary>
 /// Base for the per-source visibility commands. They take the scene and the source name
 /// and are surfaced through the dynamic "Sources" submenu.
 /// </summary>

@@ -62,6 +62,9 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
         _controller.NamesChanged += RequestMenuRefresh;
         _controller.SceneItemsChanged += OnListChangedForMenu;
         _controller.FiltersChanged += OnListChangedForMenu;
+
+        // Volume dials redraw their indicator when OBS reports a new volume or mute state.
+        _controller.InputVolumeChanged += OnInputVolumeChanged;
         _controller.Connect();
     }
 
@@ -74,7 +77,20 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
         _controller.NamesChanged -= RequestMenuRefresh;
         _controller.SceneItemsChanged -= OnListChangedForMenu;
         _controller.FiltersChanged -= OnListChangedForMenu;
+        _controller.InputVolumeChanged -= OnInputVolumeChanged;
         _controller.Disconnect();
+    }
+
+    private void OnInputVolumeChanged(string inputName)
+    {
+        try
+        {
+            _host?.RequestButtonRefresh(ObsInputVolumeCommand.Name);
+        }
+        catch (Exception ex)
+        {
+            _host?.Logger.Warn($"Could not refresh the OBS volume dials: {ex.Message}");
+        }
     }
 
     private void OnConnectionChangedForMenu(bool connected) => RequestMenuRefresh();
@@ -145,6 +161,7 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
             new ObsMuteInputCommand(_controller),
             new ObsUnmuteInputCommand(_controller),
             new ObsToggleInputMuteCommand(_controller, _liveState),
+            new ObsInputVolumeCommand(_controller),
             new ObsShowSourceCommand(_controller),
             new ObsHideSourceCommand(_controller),
             new ObsToggleSourceCommand(_controller, _liveState),
@@ -198,7 +215,7 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
                 [
                     BuildSceneFolder("Scenes", "System.ObsSetScene", scenes),
                     BuildSceneFolder("Preview Scenes", "System.ObsSetPreviewScene", scenes),
-                    await BuildAudioFolder(),
+                    await BuildAudioFolder(target),
                     await BuildSourcesFolder(scenes),
                     await BuildFiltersFolder(scenes)
                 ]
@@ -222,10 +239,14 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
         return new MenuNode { Name = folderName, Children = children };
     }
 
-    /// <summary>One folder per input, offering mute / unmute / toggle.</summary>
-    private async Task<MenuNode> BuildAudioFolder()
+    /// <summary>
+    /// One folder per input, offering mute / unmute / toggle and, for a rotary encoder, the volume
+    /// dial: a "Volume Knob" group that fills turn left, turn right and press in one click.
+    /// </summary>
+    private async Task<MenuNode> BuildAudioFolder(ButtonTargets target)
     {
         List<MenuNode> children = [];
+        bool forDial = target.HasFlag(ButtonTargets.RotaryEncoder);
 
         try
         {
@@ -233,21 +254,38 @@ public sealed class ObsPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsP
             {
                 Dictionary<string, string> parameters = new() { ["InputName"] = input };
 
-                children.Add(new MenuNode
+                List<MenuNode> actions = [];
+
+                if (forDial)
                 {
-                    Name = input,
-                    Children =
-                    [
-                        new MenuNode { Name = "Mute", CommandName = "System.ObsMuteInput", Parameters = parameters },
-                        new MenuNode { Name = "Unmute", CommandName = "System.ObsUnmuteInput", Parameters = parameters },
-                        new MenuNode
+                    var volume = new MenuCommandRef { CommandName = ObsInputVolumeCommand.Name, Parameters = parameters };
+
+                    actions.Add(new MenuNode
+                    {
+                        Name = "Volume Knob (turn = volume, press = mute)",
+                        RotaryGroup = new Dictionary<RotaryAction, MenuCommandRef>
                         {
-                            Name = "Toggle Mute",
-                            CommandName = "System.ObsToggleInputMute",
-                            Parameters = parameters
+                            [RotaryAction.CounterClockwise] = volume,
+                            [RotaryAction.Clockwise] = volume,
+                            [RotaryAction.Press] = volume
                         }
-                    ]
+                    });
+                    actions.Add(new MenuNode
+                    {
+                        Name = "Volume", CommandName = ObsInputVolumeCommand.Name, Parameters = parameters
+                    });
+                }
+
+                actions.Add(new MenuNode { Name = "Mute", CommandName = "System.ObsMuteInput", Parameters = parameters });
+                actions.Add(new MenuNode { Name = "Unmute", CommandName = "System.ObsUnmuteInput", Parameters = parameters });
+                actions.Add(new MenuNode
+                {
+                    Name = "Toggle Mute",
+                    CommandName = "System.ObsToggleInputMute",
+                    Parameters = parameters
                 });
+
+                children.Add(new MenuNode { Name = input, Children = actions });
             }
         }
         catch (Exception ex)
